@@ -7,16 +7,13 @@ import { useWorkspaceStore } from "@/stores/useWorkspaceStore";
 import { GitGraphPanel } from "./components/git/GitGraphPanel";
 import { BottomBar } from "./components/shared/BottomBar";
 import { FloatingAddButton } from "./components/shared/FloatingAddButton";
-import { IdleLandingView } from "./components/shared/IdleLandingView";
+import { MultiProjectView, type MultiProjectViewHandle } from "./components/shared/MultiProjectView";
 import { TopBar } from "./components/shared/TopBar";
 import { Sidebar } from "./components/sidebar/Sidebar";
-import { SessionPodGrid } from "./components/terminal/SessionPodGrid";
-import { TerminalGrid, type TerminalGridHandle } from "./components/terminal/TerminalGrid";
 
 const DEFAULT_SESSION_COUNT = 6;
 
 type Theme = "dark" | "light";
-type AppState = "no-project" | "project-idle" | "sessions-active";
 
 function isValidTheme(value: string | null): value is Theme {
   return value === "dark" || value === "light";
@@ -24,14 +21,14 @@ function isValidTheme(value: string | null): value is Theme {
 
 function App() {
   const tabs = useWorkspaceStore((s) => s.tabs);
+  const setSessionsLaunched = useWorkspaceStore((s) => s.setSessionsLaunched);
   const fetchSessions = useSessionStore((s) => s.fetchSessions);
   const initListeners = useSessionStore((s) => s.initListeners);
   const handleOpenProject = useOpenProject();
-  const termGridRef = useRef<TerminalGridHandle>(null);
+  const multiProjectRef = useRef<MultiProjectViewHandle>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [gitPanelOpen, setGitPanelOpen] = useState(false);
-  const [sessionsLaunched, setSessionsLaunched] = useState(false);
-  const [liveSessionCount, setLiveSessionCount] = useState(0);
+  const [sessionCounts, setSessionCounts] = useState<Map<string, number>>(new Map());
   const [currentBranch, setCurrentBranch] = useState<string | undefined>(undefined);
   const [theme, setTheme] = useState<Theme>(() => {
     const stored = localStorage.getItem("maestro-theme");
@@ -82,29 +79,24 @@ function App() {
     };
   }, [activeProjectPath]);
 
-  // Derive app state
-  const appState: AppState = !activeTab
-    ? "no-project"
-    : !sessionsLaunched
-      ? "project-idle"
-      : "sessions-active";
+  // Derive state from active tab
+  const activeTabSessionsLaunched = activeTab?.sessionsLaunched ?? false;
+  const activeTabSessionCount = activeTab ? (sessionCounts.get(activeTab.id) ?? 0) : 0;
 
-  // Handler to launch a session (transitions project-idle → sessions-active)
+  // Handler to launch a session for the active project
   const handleAddSession = () => {
-    setSessionsLaunched(true);
+    if (activeTab) {
+      setSessionsLaunched(activeTab.id, true);
+    }
   };
 
-  const handleSessionCountChange = useCallback((count: number) => {
-    setLiveSessionCount(count);
+  const handleSessionCountChange = useCallback((tabId: string, count: number) => {
+    setSessionCounts((prev) => {
+      const next = new Map(prev);
+      next.set(tabId, count);
+      return next;
+    });
   }, []);
-
-  // Reset sessions-launched when switching away from a project
-  useEffect(() => {
-    if (!activeTab) {
-      setSessionsLaunched(false);
-      setLiveSessionCount(0);
-    }
-  }, [activeTab]);
 
   return (
     <div className="flex h-screen w-screen bg-maestro-bg">
@@ -130,18 +122,12 @@ function App() {
 
         {/* Content area (main + optional git panel) */}
         <div className="flex flex-1 overflow-hidden">
-          {/* Main content */}
+          {/* Main content - MultiProjectView keeps all projects alive */}
           <main className="relative flex-1 overflow-hidden bg-maestro-bg">
-            {appState === "no-project" && <SessionPodGrid sessionCount={DEFAULT_SESSION_COUNT} />}
-            {appState === "project-idle" && <IdleLandingView onAdd={handleAddSession} />}
-            {appState === "sessions-active" && activeTab && (
-              <TerminalGrid
-                ref={termGridRef}
-                key={activeTab.id}
-                projectPath={activeTab.projectPath}
-                onSessionCountChange={handleSessionCountChange}
-              />
-            )}
+            <MultiProjectView
+              ref={multiProjectRef}
+              onSessionCountChange={handleSessionCountChange}
+            />
           </main>
 
           {/* Git graph panel (optional right side) */}
@@ -151,29 +137,35 @@ function App() {
         {/* Bottom action bar */}
         <div className="bg-maestro-bg">
           <BottomBar
-            sessionsActive={sessionsLaunched}
-            sessionCount={liveSessionCount}
+            sessionsActive={activeTabSessionsLaunched}
+            sessionCount={activeTabSessionCount}
             onSelectDirectory={handleOpenProject}
             onLaunchAll={handleAddSession}
             onStopAll={async () => {
-              // Kill all running sessions via the session store
-              const sessions = useSessionStore.getState().sessions;
-              const results = await Promise.allSettled(sessions.map((s) => killSession(s.id)));
+              if (!activeTab) return;
+              // Kill all running sessions for this project via the session store
+              const sessionStore = useSessionStore.getState();
+              const projectSessions = sessionStore.getSessionsByProject(activeTab.projectPath);
+              const results = await Promise.allSettled(projectSessions.map((s) => killSession(s.id)));
               for (const result of results) {
                 if (result.status === "rejected") {
                   console.error("Failed to stop session:", result.reason);
                 }
               }
-              setSessionsLaunched(false);
-              setLiveSessionCount(0);
+              setSessionsLaunched(activeTab.id, false);
+              setSessionCounts((prev) => {
+                const next = new Map(prev);
+                next.set(activeTab.id, 0);
+                return next;
+              });
             }}
           />
         </div>
       </div>
 
       {/* Floating add session button (only when sessions active and below max) */}
-      {appState === "sessions-active" && liveSessionCount < DEFAULT_SESSION_COUNT && (
-        <FloatingAddButton onClick={() => termGridRef.current?.addSession()} />
+      {activeTabSessionsLaunched && activeTabSessionCount < DEFAULT_SESSION_COUNT && (
+        <FloatingAddButton onClick={() => multiProjectRef.current?.addSessionToActiveProject()} />
       )}
     </div>
   );
