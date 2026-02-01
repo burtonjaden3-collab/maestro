@@ -47,6 +47,9 @@ export interface RemoteInfo {
   url: string;
 }
 
+/** Remote connection status. */
+export type RemoteStatus = "unknown" | "checking" | "connected" | "disconnected";
+
 /** Worktree info returned from the backend. */
 export interface WorktreeInfo {
   path: string;
@@ -72,6 +75,8 @@ interface GitState {
   // Config state
   userConfig: GitUserConfig | null;
   remotes: RemoteInfo[];
+  remoteStatuses: Record<string, RemoteStatus>;
+  defaultBranch: string | null;
 
   // Loading/error state
   isLoading: boolean;
@@ -95,6 +100,11 @@ interface GitState {
   fetchRemotes: (repoPath: string) => Promise<void>;
   addRemote: (repoPath: string, name: string, url: string) => Promise<void>;
   removeRemote: (repoPath: string, name: string) => Promise<void>;
+  setRemoteUrl: (repoPath: string, name: string, url: string) => Promise<void>;
+  testRemote: (repoPath: string, remoteName: string) => Promise<void>;
+  testAllRemotes: (repoPath: string) => Promise<void>;
+  fetchDefaultBranch: (repoPath: string) => Promise<void>;
+  setDefaultBranch: (repoPath: string, branch: string, global?: boolean) => Promise<void>;
   getCommitFiles: (repoPath: string, commitHash: string) => Promise<FileChange[]>;
   getRefsForCommit: (repoPath: string, commitHash: string) => Promise<string[]>;
   reset: () => void;
@@ -111,6 +121,8 @@ export const useGitStore = create<GitState>()((set, get) => ({
   hasMoreCommits: true,
   userConfig: null,
   remotes: [],
+  remoteStatuses: {},
+  defaultBranch: null,
   isLoading: false,
   isLoadingMore: false,
   error: null,
@@ -266,9 +278,78 @@ export const useGitStore = create<GitState>()((set, get) => ({
   removeRemote: async (repoPath: string, name: string) => {
     try {
       await invoke("git_remove_remote", { repoPath, name });
+      // Also remove from remoteStatuses
+      const { remoteStatuses } = get();
+      const newStatuses = { ...remoteStatuses };
+      delete newStatuses[name];
+      set({ remoteStatuses: newStatuses });
       await get().fetchRemotes(repoPath);
     } catch (err) {
       console.error("Failed to remove remote:", err);
+      throw err;
+    }
+  },
+
+  setRemoteUrl: async (repoPath: string, name: string, url: string) => {
+    try {
+      await invoke("git_set_remote_url", { repoPath, name, url });
+      await get().fetchRemotes(repoPath);
+    } catch (err) {
+      console.error("Failed to set remote URL:", err);
+      throw err;
+    }
+  },
+
+  testRemote: async (repoPath: string, remoteName: string) => {
+    // Set status to checking
+    set((state) => ({
+      remoteStatuses: { ...state.remoteStatuses, [remoteName]: "checking" },
+    }));
+    try {
+      const connected = await invoke<boolean>("git_test_remote", { repoPath, remoteName });
+      set((state) => ({
+        remoteStatuses: {
+          ...state.remoteStatuses,
+          [remoteName]: connected ? "connected" : "disconnected",
+        },
+      }));
+    } catch (err) {
+      console.error("Failed to test remote:", err);
+      set((state) => ({
+        remoteStatuses: { ...state.remoteStatuses, [remoteName]: "disconnected" },
+      }));
+    }
+  },
+
+  testAllRemotes: async (repoPath: string) => {
+    const { remotes } = get();
+    // Set all to checking
+    const checkingStatuses: Record<string, RemoteStatus> = {};
+    for (const remote of remotes) {
+      checkingStatuses[remote.name] = "checking";
+    }
+    set({ remoteStatuses: checkingStatuses });
+
+    // Test all in parallel
+    await Promise.all(remotes.map((remote) => get().testRemote(repoPath, remote.name)));
+  },
+
+  fetchDefaultBranch: async (repoPath: string) => {
+    try {
+      const defaultBranch = await invoke<string | null>("git_get_default_branch", { repoPath });
+      set({ defaultBranch });
+    } catch (err) {
+      console.error("Failed to fetch default branch:", err);
+      set({ defaultBranch: null });
+    }
+  },
+
+  setDefaultBranch: async (repoPath: string, branch: string, global = false) => {
+    try {
+      await invoke("git_set_default_branch", { repoPath, branch, global });
+      await get().fetchDefaultBranch(repoPath);
+    } catch (err) {
+      console.error("Failed to set default branch:", err);
       throw err;
     }
   },
@@ -299,6 +380,8 @@ export const useGitStore = create<GitState>()((set, get) => ({
       hasMoreCommits: true,
       userConfig: null,
       remotes: [],
+      remoteStatuses: {},
+      defaultBranch: null,
       isLoading: false,
       isLoadingMore: false,
       error: null,

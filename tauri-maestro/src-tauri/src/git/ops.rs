@@ -550,4 +550,56 @@ impl Git {
 
         Ok(refs)
     }
+
+    /// Tests connectivity to a remote by running `git ls-remote --heads`.
+    ///
+    /// Returns `true` if the remote is reachable, `false` otherwise.
+    /// Uses a 10-second timeout to avoid hanging on unresponsive remotes.
+    pub async fn test_remote(&self, remote_name: &str) -> Result<bool, GitError> {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            self.run(&["ls-remote", "--heads", remote_name]),
+        )
+        .await
+        {
+            Ok(Ok(_)) => Ok(true),
+            Ok(Err(GitError::CommandFailed { .. })) => Ok(false),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Ok(false), // Timeout = disconnected
+        }
+    }
+
+    /// Updates the URL of an existing remote.
+    pub async fn set_remote_url(&self, name: &str, url: &str) -> Result<(), GitError> {
+        self.run(&["remote", "set-url", name, url]).await?;
+        Ok(())
+    }
+
+    /// Gets the default branch name from git config (init.defaultBranch).
+    ///
+    /// First checks local config, then global. Returns None if not set.
+    pub async fn get_default_branch(&self) -> Result<Option<String>, GitError> {
+        // Try local first
+        match self.run(&["config", "--local", "init.defaultBranch"]).await {
+            Ok(output) => return Ok(Some(output.trimmed().to_string())),
+            Err(GitError::CommandFailed { code: 1, .. }) => {} // Not set locally
+            Err(e) => return Err(e),
+        }
+
+        // Fall back to global
+        match self.run(&["config", "--global", "init.defaultBranch"]).await {
+            Ok(output) => Ok(Some(output.trimmed().to_string())),
+            Err(GitError::CommandFailed { code: 1, .. }) => Ok(None), // Not set
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Sets the default branch name in git config (init.defaultBranch).
+    ///
+    /// If `global` is true, sets the global config; otherwise, sets repository-local config.
+    pub async fn set_default_branch(&self, branch: &str, global: bool) -> Result<(), GitError> {
+        let scope = if global { "--global" } else { "--local" };
+        self.run(&["config", scope, "init.defaultBranch", branch]).await?;
+        Ok(())
+    }
 }

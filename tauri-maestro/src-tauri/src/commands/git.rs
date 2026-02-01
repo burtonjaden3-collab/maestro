@@ -187,3 +187,44 @@ pub async fn git_refs_for_commit(
     let git = Git::new(&repo_path);
     git.refs_for_commit(&commit_hash).await
 }
+
+/// Tests connectivity to a remote.
+/// Returns true if reachable, false otherwise.
+#[tauri::command]
+pub async fn git_test_remote(repo_path: String, remote_name: String) -> Result<bool, GitError> {
+    validate_repo_path(&repo_path)?;
+    let git = Git::new(&repo_path);
+    git.test_remote(&remote_name).await
+}
+
+/// Updates the URL of an existing remote.
+#[tauri::command]
+pub async fn git_set_remote_url(
+    repo_path: String,
+    name: String,
+    url: String,
+) -> Result<(), GitError> {
+    validate_repo_path(&repo_path)?;
+    let git = Git::new(&repo_path);
+    git.set_remote_url(&name, &url).await
+}
+
+/// Gets the default branch name from git config.
+#[tauri::command]
+pub async fn git_get_default_branch(repo_path: String) -> Result<Option<String>, GitError> {
+    validate_repo_path(&repo_path)?;
+    let git = Git::new(&repo_path);
+    git.get_default_branch().await
+}
+
+/// Sets the default branch name in git config.
+#[tauri::command]
+pub async fn git_set_default_branch(
+    repo_path: String,
+    branch: String,
+    global: bool,
+) -> Result<(), GitError> {
+    validate_repo_path(&repo_path)?;
+    let git = Git::new(&repo_path);
+    git.set_default_branch(&branch, global).await
+}

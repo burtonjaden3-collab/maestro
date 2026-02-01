@@ -2,7 +2,6 @@ import {
   Activity,
   AlertTriangle,
   Bot,
-  Check,
   ChevronDown,
   ChevronRight,
   Circle,
@@ -22,11 +21,15 @@ import {
   Sparkles,
   Store,
   Sun,
+  User,
   Wrench,
   Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type AiMode, type BackendSessionStatus, useSessionStore } from "@/stores/useSessionStore";
+import { useGitStore } from "@/stores/useGitStore";
+import { useWorkspaceStore } from "@/stores/useWorkspaceStore";
+import { GitSettingsModal, RemoteStatusIndicator } from "@/components/git";
 
 type SidebarTab = "config" | "processes";
 
@@ -289,32 +292,114 @@ function ConfigTab({
 /* ── 1. Git Repository ── */
 
 function GitRepositorySection() {
+  const [showSettings, setShowSettings] = useState(false);
+  const tabs = useWorkspaceStore((s) => s.tabs);
+  const activeTab = tabs.find((t) => t.active);
+  const repoPath = activeTab?.projectPath ?? "";
+
+  const { userConfig, remotes, remoteStatuses, fetchUserConfig, fetchRemotes, testAllRemotes } =
+    useGitStore();
+
+  // Fetch data on mount and when repoPath changes
+  useEffect(() => {
+    if (!repoPath) return;
+    fetchUserConfig(repoPath);
+    fetchRemotes(repoPath);
+  }, [repoPath, fetchUserConfig, fetchRemotes]);
+
+  // Test remotes after fetching them
+  useEffect(() => {
+    if (!repoPath || remotes.length === 0) return;
+    // Only test if we don't have statuses yet
+    const hasStatuses = remotes.some((r) => remoteStatuses[r.name] !== undefined);
+    if (!hasStatuses) {
+      testAllRemotes(repoPath);
+    }
+  }, [repoPath, remotes, remoteStatuses, testAllRemotes]);
+
+  const hasUser = userConfig?.name || userConfig?.email;
+  const displayName = userConfig?.name || "Not configured";
+  const displayEmail = userConfig?.email || "No email set";
+
+  // Format remote URL for display (shorten GitHub URLs)
+  const formatRemoteUrl = (url: string) => {
+    // git@github.com:user/repo.git -> github.com/user/repo
+    // https://github.com/user/repo.git -> github.com/user/repo
+    const match = url.match(/github\.com[:/](.+?)(?:\.git)?$/);
+    if (match) {
+      return `github.com/${match[1]}`;
+    }
+    // For other URLs, just show the host/path
+    try {
+      const parsed = new URL(url.replace(/^git@/, "https://").replace(/:(?!\/\/)/, "/"));
+      return `${parsed.host}${parsed.pathname.replace(/\.git$/, "")}`;
+    } catch {
+      return url;
+    }
+  };
+
+  if (!repoPath) {
+    return (
+      <div className={cardClass}>
+        <SectionHeader
+          icon={GitBranch}
+          label="Git Repository"
+          iconColor="text-maestro-muted"
+        />
+        <div className="px-1 py-1 text-xs text-maestro-muted">No project selected</div>
+      </div>
+    );
+  }
+
   return (
-    <div className={cardClass}>
-      <SectionHeader
-        icon={GitBranch}
-        label="Git Repository"
-        iconColor="text-maestro-green"
-        right={
-          <button type="button" className="rounded p-0.5 hover:bg-maestro-border/40">
-            <Settings size={12} className="text-maestro-muted" />
-          </button>
-        }
-      />
-      {/* User */}
-      <div className="flex items-center gap-2 px-1 py-1">
-        <span className="h-2 w-2 shrink-0 rounded-full bg-maestro-green" />
-        <span className="text-xs font-semibold text-maestro-text truncate">User</span>
+    <>
+      <div className={cardClass}>
+        <SectionHeader
+          icon={GitBranch}
+          label="Git Repository"
+          iconColor="text-maestro-green"
+          right={
+            <button
+              type="button"
+              onClick={() => setShowSettings(true)}
+              className="rounded p-0.5 hover:bg-maestro-border/40"
+              title="Git settings"
+            >
+              <Settings size={12} className="text-maestro-muted" />
+            </button>
+          }
+        />
+        {/* User */}
+        <div className="flex items-center gap-2 px-1 py-1">
+          <User size={12} className={hasUser ? "text-maestro-green" : "text-maestro-muted"} />
+          <span className="text-xs font-semibold text-maestro-text truncate">{displayName}</span>
+        </div>
+        <div className="pl-5 text-[11px] text-maestro-muted truncate">{displayEmail}</div>
+
+        {/* Remotes */}
+        {remotes.length === 0 ? (
+          <div className="mt-2 px-1 py-1 text-xs text-maestro-muted">No remotes configured</div>
+        ) : (
+          remotes.map((remote) => (
+            <div key={remote.name} className="mt-1">
+              <div className="flex items-center gap-2 px-1 py-1">
+                <RemoteStatusIndicator status={remoteStatuses[remote.name] ?? "unknown"} />
+                <span className="text-xs font-semibold text-maestro-text truncate">
+                  {remote.name}
+                </span>
+              </div>
+              <div className="pl-5 text-[11px] text-maestro-muted truncate">
+                {formatRemoteUrl(remote.url)}
+              </div>
+            </div>
+          ))
+        )}
       </div>
-      <div className="pl-5 text-[11px] text-maestro-muted truncate">user@example.com</div>
-      {/* Origin */}
-      <div className="flex items-center gap-2 px-1 py-1 mt-1">
-        <span className="h-2 w-2 shrink-0 rounded-full bg-maestro-green" />
-        <Check size={10} className="text-maestro-green shrink-0" />
-        <span className="text-xs font-semibold text-maestro-text truncate">origin</span>
-      </div>
-      <div className="pl-5 text-[11px] text-maestro-muted truncate">github.com/user/project</div>
-    </div>
+
+      {showSettings && (
+        <GitSettingsModal repoPath={repoPath} onClose={() => setShowSettings(false)} />
+      )}
+    </>
   );
 }
 
