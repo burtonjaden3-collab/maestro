@@ -1,6 +1,7 @@
 import { LazyStore } from "@tauri-apps/plugin-store";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
+import { killSession } from "@/lib/terminal";
 
 // --- Types ---
 
@@ -10,12 +11,16 @@ import { createJSONStorage, persist, type StateStorage } from "zustand/middlewar
  * @property id - Random UUID generated on creation; stable across persisted sessions.
  * @property projectPath - Absolute filesystem path; used as the dedup key in `openProject`.
  * @property active - Exactly one tab should be active at a time; enforced by store actions.
+ * @property sessionIds - PTY session IDs belonging to this project.
+ * @property sessionsLaunched - Whether user has launched sessions for this project.
  */
 export type WorkspaceTab = {
   id: string;
   name: string;
   projectPath: string;
   active: boolean;
+  sessionIds: number[];
+  sessionsLaunched: boolean;
 };
 
 /** Read-only slice of the workspace store; persisted to disk via Zustand `persist`. */
@@ -32,6 +37,10 @@ type WorkspaceActions = {
   openProject: (path: string) => void;
   selectTab: (id: string) => void;
   closeTab: (id: string) => void;
+  addSessionToProject: (tabId: string, sessionId: number) => void;
+  removeSessionFromProject: (tabId: string, sessionId: number) => void;
+  setSessionsLaunched: (tabId: string, launched: boolean) => void;
+  getTabByPath: (projectPath: string) => WorkspaceTab | undefined;
 };
 
 // --- Tauri LazyStore-backed StateStorage adapter ---
@@ -125,7 +134,7 @@ export const useWorkspaceStore = create<WorkspaceState & WorkspaceActions>()(
         set({
           tabs: [
             ...tabs.map((t) => ({ ...t, active: false })),
-            { id, name, projectPath: path, active: true },
+            { id, name, projectPath: path, active: true, sessionIds: [], sessionsLaunched: false },
           ],
         });
       },
@@ -139,6 +148,20 @@ export const useWorkspaceStore = create<WorkspaceState & WorkspaceActions>()(
       },
 
       closeTab: (id: string) => {
+        const tabToClose = get().tabs.find((t) => t.id === id);
+
+        // Kill all sessions belonging to this project (fire-and-forget)
+        if (tabToClose && tabToClose.sessionIds.length > 0) {
+          Promise.allSettled(tabToClose.sessionIds.map((sessionId) => killSession(sessionId)))
+            .then((results) => {
+              for (const result of results) {
+                if (result.status === "rejected") {
+                  console.error("Failed to kill session on tab close:", result.reason);
+                }
+              }
+            });
+        }
+
         const remaining = get().tabs.filter((t) => t.id !== id);
 
         if (remaining.length === 0) {
@@ -154,12 +177,59 @@ export const useWorkspaceStore = create<WorkspaceState & WorkspaceActions>()(
             : remaining,
         });
       },
+
+      addSessionToProject: (tabId: string, sessionId: number) => {
+        set({
+          tabs: get().tabs.map((t) =>
+            t.id === tabId && !t.sessionIds.includes(sessionId)
+              ? { ...t, sessionIds: [...t.sessionIds, sessionId] }
+              : t
+          ),
+        });
+      },
+
+      removeSessionFromProject: (tabId: string, sessionId: number) => {
+        set({
+          tabs: get().tabs.map((t) =>
+            t.id === tabId
+              ? { ...t, sessionIds: t.sessionIds.filter((id) => id !== sessionId) }
+              : t
+          ),
+        });
+      },
+
+      setSessionsLaunched: (tabId: string, launched: boolean) => {
+        set({
+          tabs: get().tabs.map((t) =>
+            t.id === tabId ? { ...t, sessionsLaunched: launched } : t
+          ),
+        });
+      },
+
+      getTabByPath: (projectPath: string) => {
+        return get().tabs.find((t) => t.projectPath === projectPath);
+      },
     }),
     {
       name: "maestro-workspace",
       storage: createJSONStorage(() => tauriStorage),
       partialize: (state) => ({ tabs: state.tabs }),
-      version: 1,
+      version: 2,
+      migrate: (persistedState, version) => {
+        const state = persistedState as WorkspaceState;
+        if (version < 2) {
+          // Add new fields to existing tabs
+          return {
+            ...state,
+            tabs: state.tabs.map((t) => ({
+              ...t,
+              sessionIds: (t as WorkspaceTab).sessionIds ?? [],
+              sessionsLaunched: (t as WorkspaceTab).sessionsLaunched ?? false,
+            })),
+          };
+        }
+        return state;
+      },
     },
   ),
 );

@@ -1,6 +1,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Minus, PanelLeft, Plus, Square, X } from "lucide-react";
 import { useCallback, useMemo, useRef } from "react";
+import { useProjectStatus, STATUS_COLORS } from "@/hooks/useProjectStatus";
 
 export type ProjectTab = {
   id: string;
@@ -17,10 +18,76 @@ interface ProjectTabsProps {
   sidebarOpen: boolean;
 }
 
-/** Derive a status-dot color class from tab state. */
-function statusDotColor(tab: ProjectTab): string {
-  // TODO: derive from real tab status once WorkspaceTab carries a status field
-  return tab.active ? "bg-maestro-green" : "bg-maestro-muted";
+/**
+ * Individual tab component that uses the useProjectStatus hook.
+ */
+function TabItem({
+  tab,
+  onSelect,
+  onClose,
+  onKeyDown,
+  tabRef,
+}: {
+  tab: ProjectTab;
+  onSelect: () => void;
+  onClose: () => void;
+  onKeyDown: (e: React.KeyboardEvent) => void;
+  tabRef: (el: HTMLDivElement | null) => void;
+}) {
+  const { status, sessionCount } = useProjectStatus(tab.id);
+  const shouldPulse = status === "working" || status === "needs-input";
+
+  return (
+    <div
+      ref={tabRef}
+      role="tab"
+      aria-selected={tab.active}
+      tabIndex={tab.active ? 0 : -1}
+      onClick={onSelect}
+      onKeyDown={onKeyDown}
+      className={`flex items-center gap-1.5 rounded-t px-2 py-1.5 text-xs font-medium cursor-pointer ${
+        tab.active
+          ? "bg-maestro-bg text-maestro-text"
+          : "text-maestro-muted hover:text-maestro-text"
+      }`}
+    >
+      <span className="flex items-center gap-1.5">
+        {/* Status indicator dot */}
+        <span
+          className={`h-2 w-2 rounded-full ${STATUS_COLORS[status]} ${
+            shouldPulse ? "animate-pulse" : ""
+          }`}
+        />
+        <span>{tab.name}</span>
+
+        {/* Session count badge */}
+        {sessionCount > 0 && (
+          <span
+            className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${
+              status === "working"
+                ? "bg-maestro-green/20 text-maestro-green"
+                : status === "needs-input"
+                  ? "bg-yellow-500/20 text-yellow-500"
+                  : "bg-maestro-muted/20 text-maestro-muted"
+            }`}
+          >
+            {sessionCount}
+          </span>
+        )}
+      </span>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
+        className="ml-1 rounded p-0.5 hover:bg-maestro-border"
+        aria-label={`Close ${tab.name}`}
+      >
+        <X size={10} />
+      </button>
+    </div>
+  );
 }
 
 export function ProjectTabs({
@@ -69,13 +136,12 @@ export function ProjectTabs({
             <span className="px-2 text-xs text-maestro-muted">No projects</span>
           ) : (
             tabs.map((tab) => (
-              <div
+              <TabItem
                 key={tab.id}
-                ref={(el) => setTabRef(tab.id, el)}
-                role="tab"
-                aria-selected={tab.active}
-                tabIndex={tab.active ? 0 : -1}
-                onClick={() => onSelectTab(tab.id)}
+                tab={tab}
+                onSelect={() => onSelectTab(tab.id)}
+                onClose={() => onCloseTab(tab.id)}
+                tabRef={(el) => setTabRef(tab.id, el)}
                 onKeyDown={(e) => {
                   if (e.key === "ArrowRight") {
                     const idx = tabs.findIndex((t) => t.id === tab.id);
@@ -96,28 +162,7 @@ export function ProjectTabs({
                     onSelectTab(tab.id);
                   }
                 }}
-                className={`flex items-center gap-1.5 rounded-t px-2 py-1.5 text-xs font-medium cursor-pointer ${
-                  tab.active
-                    ? "bg-maestro-bg text-maestro-text"
-                    : "text-maestro-muted hover:text-maestro-text"
-                }`}
-              >
-                <span className="flex items-center gap-1.5">
-                  <span className={`h-2 w-2 rounded-full ${statusDotColor(tab)}`} />
-                  <span>{tab.name}</span>
-                </span>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onCloseTab(tab.id);
-                  }}
-                  className="ml-1 rounded p-0.5 hover:bg-maestro-border"
-                  aria-label={`Close ${tab.name}`}
-                >
-                  <X size={10} />
-                </button>
-              </div>
+              />
             ))
           )}
         </div>

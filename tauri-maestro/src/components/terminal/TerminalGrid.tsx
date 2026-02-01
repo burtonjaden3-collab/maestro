@@ -1,5 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { killSession, spawnShell } from "@/lib/terminal";
+import { useWorkspaceStore } from "@/stores/useWorkspaceStore";
 import { TerminalView } from "./TerminalView";
 
 /** Hard ceiling on concurrent PTY sessions per grid to bound resource usage. */
@@ -31,11 +32,15 @@ export interface TerminalGridHandle {
 /**
  * @property projectPath - Working directory passed to `spawnShell`; when absent the backend
  *   uses its own default cwd.
+ * @property tabId - Workspace tab ID for session-project association.
+ * @property preserveOnHide - If true, don't kill sessions when component unmounts (for project switching).
  * @property onSessionCountChange - Fires whenever the session array length changes,
  *   letting parents update badge counts or toolbar state.
  */
 interface TerminalGridProps {
   projectPath?: string;
+  tabId?: string;
+  preserveOnHide?: boolean;
   onSessionCountChange?: (count: number) => void;
 }
 
@@ -55,9 +60,11 @@ interface TerminalGridProps {
  *   to guard against race conditions from rapid clicks.
  */
 export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(function TerminalGrid(
-  { projectPath, onSessionCountChange },
+  { projectPath, tabId, preserveOnHide = false, onSessionCountChange },
   ref,
 ) {
+  const addSessionToProject = useWorkspaceStore((s) => s.addSessionToProject);
+  const removeSessionFromProject = useWorkspaceStore((s) => s.removeSessionFromProject);
   const [sessions, setSessions] = useState<number[]>([]);
   const [error, setError] = useState<string | null>(null);
   const sessionsRef = useRef<number[]>([]);
@@ -77,6 +84,10 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
         if (!cancelled) {
           setSessions([id]);
           mounted.current = true;
+          // Register session with the project
+          if (tabId) {
+            addSessionToProject(tabId, id);
+          }
         } else {
           killSession(id).catch(console.error);
         }
@@ -92,11 +103,14 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
       cancelled = true;
       mounted.current = false;
       isMountedRef.current = false;
-      for (const id of sessionsRef.current) {
-        killSession(id).catch(console.error);
+      // Only kill sessions if not preserving (i.e., project actually closed)
+      if (!preserveOnHide) {
+        for (const id of sessionsRef.current) {
+          killSession(id).catch(console.error);
+        }
       }
     };
-  }, [projectPath]);
+  }, [projectPath, tabId, preserveOnHide, addSessionToProject]);
 
   // Auto-respawn when all sessions close (not initial mount, not error)
   useEffect(() => {
@@ -104,8 +118,15 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
     if (sessions.length === 0 && mounted.current && !error) {
       spawnShell(projectPath)
         .then((id) => {
-          if (!cancelled) setSessions([id]);
-          else killSession(id).catch(console.error);
+          if (!cancelled) {
+            setSessions([id]);
+            // Register session with the project
+            if (tabId) {
+              addSessionToProject(tabId, id);
+            }
+          } else {
+            killSession(id).catch(console.error);
+          }
         })
         .catch((err) => {
           console.error(err);
@@ -115,26 +136,34 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
     return () => {
       cancelled = true;
     };
-  }, [sessions.length, error, projectPath]);
+  }, [sessions.length, error, projectPath, tabId, addSessionToProject]);
 
   const handleKill = useCallback((sessionId: number) => {
     setSessions((prev) => prev.filter((id) => id !== sessionId));
-  }, []);
+    // Unregister session from the project
+    if (tabId) {
+      removeSessionFromProject(tabId, sessionId);
+    }
+  }, [tabId, removeSessionFromProject]);
 
   const addSession = useCallback(() => {
     if (sessionsRef.current.length >= MAX_SESSIONS) return;
     spawnShell(projectPath)
-      .then((id) =>
+      .then((id) => {
         setSessions((prev) => {
           if (prev.length >= MAX_SESSIONS) {
             killSession(id).catch(console.error);
             return prev;
           }
           return [...prev, id];
-        }),
-      )
+        });
+        // Register session with the project
+        if (tabId) {
+          addSessionToProject(tabId, id);
+        }
+      })
       .catch(console.error);
-  }, [projectPath]);
+  }, [projectPath, tabId, addSessionToProject]);
 
   useImperativeHandle(ref, () => ({ addSession }), [addSession]);
 

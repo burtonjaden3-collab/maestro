@@ -40,6 +40,9 @@ pub struct SessionConfig {
     pub branch: Option<String>,
     pub status: SessionStatus,
     pub worktree_path: Option<String>,
+    /// The project directory this session belongs to.
+    /// Canonicalized absolute path for reliable comparison.
+    pub project_path: String,
 }
 
 /// Thread-safe session registry backed by `DashMap` for lock-free concurrent reads.
@@ -67,13 +70,14 @@ impl SessionManager {
 
     /// Inserts a new session with `Starting` status and no branch assigned.
     /// Returns `Err` with the existing config if a session with this ID already exists.
-    pub fn create_session(&self, id: u32, mode: AiMode) -> Result<SessionConfig, SessionConfig> {
+    pub fn create_session(&self, id: u32, mode: AiMode, project_path: String) -> Result<SessionConfig, SessionConfig> {
         let config = SessionConfig {
             id,
             mode,
             branch: None,
             status: SessionStatus::Starting,
             worktree_path: None,
+            project_path,
         };
         match self.sessions.entry(id) {
             Entry::Occupied(e) => Err(e.get().clone()),
@@ -120,5 +124,30 @@ impl SessionManager {
     /// Removes and returns a session. Returns `None` if not found.
     pub fn remove_session(&self, id: u32) -> Option<SessionConfig> {
         self.sessions.remove(&id).map(|(_, v)| v)
+    }
+
+    /// Returns all sessions for a specific project path.
+    /// Performs an exact match on project paths.
+    pub fn get_sessions_for_project(&self, project_path: &str) -> Vec<SessionConfig> {
+        self.sessions
+            .iter()
+            .filter(|entry| entry.value().project_path == project_path)
+            .map(|entry| entry.value().clone())
+            .collect()
+    }
+
+    /// Removes all sessions for a project. Returns the removed configs.
+    /// Useful when closing a project tab.
+    pub fn remove_sessions_for_project(&self, project_path: &str) -> Vec<SessionConfig> {
+        let ids_to_remove: Vec<u32> = self.sessions
+            .iter()
+            .filter(|entry| entry.value().project_path == project_path)
+            .map(|entry| *entry.key())
+            .collect();
+
+        ids_to_remove
+            .into_iter()
+            .filter_map(|id| self.sessions.remove(&id).map(|(_, v)| v))
+            .collect()
     }
 }

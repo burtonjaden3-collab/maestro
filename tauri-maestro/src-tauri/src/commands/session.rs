@@ -1,5 +1,6 @@
 use tauri::State;
 
+use crate::core::process_manager::ProcessManager;
 use crate::core::session_manager::{AiMode, SessionConfig, SessionManager, SessionStatus};
 
 /// Exposes `SessionManager::all_sessions` to the frontend.
@@ -17,8 +18,15 @@ pub async fn create_session(
     state: State<'_, SessionManager>,
     id: u32,
     mode: AiMode,
+    project_path: String,
 ) -> Result<SessionConfig, String> {
-    state.create_session(id, mode)
+    // Canonicalize path for consistent storage
+    let canonical = std::fs::canonicalize(&project_path)
+        .map_err(|e| format!("Invalid project path '{}': {}", project_path, e))?
+        .to_string_lossy()
+        .into_owned();
+
+    state.create_session(id, mode, canonical)
         .map_err(|existing| format!("Session {} already exists", existing.id))
 }
 
@@ -56,4 +64,44 @@ pub async fn remove_session(
     session_id: u32,
 ) -> Result<Option<SessionConfig>, String> {
     Ok(state.remove_session(session_id))
+}
+
+/// Gets all sessions for a specific project.
+#[tauri::command]
+pub async fn get_sessions_for_project(
+    state: State<'_, SessionManager>,
+    project_path: String,
+) -> Result<Vec<SessionConfig>, String> {
+    let canonical = std::fs::canonicalize(&project_path)
+        .map_err(|e| format!("Invalid project path '{}': {}", project_path, e))?
+        .to_string_lossy()
+        .into_owned();
+
+    Ok(state.get_sessions_for_project(&canonical))
+}
+
+/// Removes all sessions for a project (used when closing a project tab).
+/// Also kills the associated PTY sessions.
+#[tauri::command]
+pub async fn remove_sessions_for_project(
+    state: State<'_, SessionManager>,
+    process_manager: State<'_, ProcessManager>,
+    project_path: String,
+) -> Result<Vec<SessionConfig>, String> {
+    let canonical = std::fs::canonicalize(&project_path)
+        .map_err(|e| format!("Invalid project path '{}': {}", project_path, e))?
+        .to_string_lossy()
+        .into_owned();
+
+    let removed = state.remove_sessions_for_project(&canonical);
+
+    // Also kill associated PTY sessions
+    for session in &removed {
+        // Fire-and-forget kill -- log errors but don't fail the removal
+        if let Err(e) = process_manager.kill_session(session.id).await {
+            log::warn!("Failed to kill PTY for session {}: {}", session.id, e);
+        }
+    }
+
+    Ok(removed)
 }
