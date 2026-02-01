@@ -56,6 +56,8 @@ pub fn run() {
             commands::session::update_session_status,
             commands::session::assign_session_branch,
             commands::session::remove_session,
+            commands::session::get_sessions_for_project,
+            commands::session::remove_sessions_for_project,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Maestro");
