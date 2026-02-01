@@ -3,7 +3,15 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useSta
 import { getBranchesWithWorktreeStatus, type BranchWithWorktreeStatus } from "@/lib/git";
 import { setSessionMcpServers, type McpServerConfig } from "@/lib/mcp";
 import { setSessionSkills, setSessionPlugins, type PluginConfig, type SkillConfig } from "@/lib/plugins";
-import { assignSessionBranch, createSession, killSession, spawnShell } from "@/lib/terminal";
+import {
+  AI_CLI_CONFIG,
+  assignSessionBranch,
+  checkCliAvailable,
+  createSession,
+  killSession,
+  spawnShell,
+  writeStdin,
+} from "@/lib/terminal";
 import { cleanupSessionWorktree, prepareSessionWorktree } from "@/lib/worktreeManager";
 import { useMcpStore } from "@/stores/useMcpStore";
 import { usePluginStore } from "@/stores/usePluginStore";
@@ -272,6 +280,25 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
 
       // Refresh sessions in store so TerminalView can read the updated config
       await useSessionStore.getState().fetchSessions();
+
+      // Auto-launch AI CLI after shell initializes
+      if (slot.mode !== "Plain") {
+        const cliConfig = AI_CLI_CONFIG[slot.mode];
+        if (cliConfig.command) {
+          const isAvailable = await checkCliAvailable(cliConfig.command);
+
+          if (isAvailable) {
+            // Wait for shell to initialize
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            // Send CLI launch command with carriage return
+            await writeStdin(sessionId, `${cliConfig.command}\r`);
+          } else {
+            console.warn(
+              `CLI '${cliConfig.command}' not found. Install with: ${cliConfig.installHint}`
+            );
+          }
+        }
+      }
 
       setSlots((prev) =>
         prev.map((s) =>
