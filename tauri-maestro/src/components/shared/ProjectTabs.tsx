@@ -1,7 +1,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Minus, PanelLeft, Plus, Square, X } from "lucide-react";
 import { useCallback, useMemo, useRef } from "react";
-import { useProjectStatus, STATUS_COLORS, type ProjectStatus } from "@/hooks/useProjectStatus";
+import { useProjectStatus, STATUS_COLORS } from "@/hooks/useProjectStatus";
 
 export type ProjectTab = {
   id: string;
