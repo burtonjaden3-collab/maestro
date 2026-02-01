@@ -298,8 +298,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fac4744fb15ae8337dc853fee7fb3f4e48c0fbaa23d0afe49c447b4fab126118"
 dependencies = [
  "iana-time-zone",
+ "js-sys",
  "num-traits",
  "serde",
+ "wasm-bindgen",
  "windows-link 0.2.1",
 ]
 
@@ -3516,16 +3518,20 @@ name = "tauri-maestro"
 version = "2.0.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "dirs 5.0.1",
  "nix 0.28.0",
+ "once_cell",
  "parking_lot",
  "portable-pty",
+ "regex",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-shell",
  "tauri-plugin-store",
+ "thiserror 1.0.69",
  "tokio",
  "uuid",
  "windows-sys 0.52.0",

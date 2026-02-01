@@ -1,12 +1,14 @@
 use parking_lot::Mutex;
-use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 
 struct PtySession {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
+    child: Box<dyn Child + Send + Sync>,
 }
 
 pub struct PtyManager {
@@ -20,7 +22,17 @@ impl PtyManager {
         }
     }
 
-    pub async fn spawn(&self, session_id: &str, app: AppHandle) -> anyhow::Result<()> {
+    /// Spawn a PTY with an output callback for URL detection
+    pub async fn spawn_with_callback<F>(
+        &self,
+        session_id: &str,
+        working_directory: Option<String>,
+        app: AppHandle,
+        on_output: F,
+    ) -> anyhow::Result<u32>
+    where
+        F: Fn(&str) + Send + Sync + 'static,
+    {
         let pty_system = native_pty_system();
 
         let pair = pty_system.openpty(PtySize {
@@ -35,12 +47,20 @@ impl PtyManager {
         let mut cmd = CommandBuilder::new(&shell);
         cmd.env("TERM", "xterm-256color");
 
-        // Set working directory to home
-        if let Some(home) = dirs::home_dir() {
+        // Set working directory
+        if let Some(dir) = working_directory {
+            cmd.cwd(dir);
+        } else if let Some(home) = dirs::home_dir() {
             cmd.cwd(home);
         }
 
-        let _child = pair.slave.spawn_command(cmd)?;
+        let child = pair.slave.spawn_command(cmd)?;
+
+        // Get child PID
+        #[cfg(unix)]
+        let pid = child.process_id().unwrap_or(0);
+        #[cfg(windows)]
+        let pid = child.process_id().unwrap_or(0);
 
         let mut reader = pair.master.try_clone_reader()?;
         let writer = pair.master.take_writer()?;
@@ -53,13 +73,15 @@ impl PtyManager {
                 PtySession {
                     master: pair.master,
                     writer,
+                    child,
                 },
             );
         }
 
-        // Spawn reader task
+        // Spawn reader task with callback
         let event_name = format!("pty-output-{}", session_id);
         let session_id_owned = session_id.to_string();
+        let on_output = Arc::new(on_output);
 
         std::thread::spawn(move || {
             let mut buf = [0u8; 8192];
@@ -68,7 +90,12 @@ impl PtyManager {
                     Ok(0) => break,
                     Ok(n) => {
                         let data = String::from_utf8_lossy(&buf[..n]).to_string();
-                        let _ = app.emit(&event_name, data);
+
+                        // Call the output callback for URL detection
+                        on_output(&data);
+
+                        // Emit to frontend
+                        let _ = app.emit(&event_name, &data);
                     }
                     Err(_) => break,
                 }
@@ -76,6 +103,13 @@ impl PtyManager {
             println!("PTY reader exited for session {}", session_id_owned);
         });
 
+        Ok(pid)
+    }
+
+    /// Legacy spawn without callback
+    pub async fn spawn(&self, session_id: &str, app: AppHandle) -> anyhow::Result<()> {
+        self.spawn_with_callback(session_id, None, app, |_| {})
+            .await?;
         Ok(())
     }
 
@@ -103,8 +137,30 @@ impl PtyManager {
 
     pub async fn kill(&self, session_id: &str) -> anyhow::Result<()> {
         let mut sessions = self.sessions.lock();
-        sessions.remove(session_id);
+        if let Some(mut session) = sessions.remove(session_id) {
+            // Try to kill the child process
+            let _ = session.child.kill();
+        }
         Ok(())
+    }
+
+    /// Get the PID of a session's child process
+    pub fn get_pid(&self, session_id: &str) -> Option<u32> {
+        let sessions = self.sessions.lock();
+        sessions
+            .get(session_id)
+            .and_then(|s| s.child.process_id())
+    }
+
+    /// Check if a session's child is still running
+    pub fn is_running(&self, session_id: &str) -> bool {
+        let mut sessions = self.sessions.lock();
+        if let Some(session) = sessions.get_mut(session_id) {
+            // try_wait returns Ok(Some(status)) if exited, Ok(None) if still running
+            matches!(session.child.try_wait(), Ok(None))
+        } else {
+            false
+        }
     }
 
     fn get_shell() -> String {
@@ -116,5 +172,11 @@ impl PtyManager {
         {
             std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
         }
+    }
+}
+
+impl Default for PtyManager {
+    fn default() -> Self {
+        Self::new()
     }
 }
