@@ -346,7 +346,7 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
         await setSessionPlugins(projectPath, sessionId, slot.enabledPlugins);
       }
 
-      // Auto-launch AI CLI after shell initializes
+// Auto-launch AI CLI after shell initializes
       // IMPORTANT: For Claude mode, we must write MCP config and launch CLI atomically
       // to prevent race conditions when multiple sessions launch without worktrees.
       // Without worktrees, all sessions share the same .mcp.json file, so we must:
@@ -408,6 +408,9 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
         }
       }
 
+      // Update slot state FIRST to mount TerminalView and initialize xterm.js.
+      // This is critical because CLIs like Codex send DSR (cursor position) queries
+      // on startup, and xterm.js must be mounted to respond to them.
       setSlots((prev) =>
         prev.map((s) =>
           s.id === slotId ? { ...s, sessionId, worktreePath } : s
