@@ -222,14 +222,16 @@ export const useMarketplaceStore = create<MarketplaceState>()((set, get) => ({
     try {
       await refreshAllMarketplaces();
       // Fetch updated data
-      const [sources, availablePlugins] = await Promise.all([
+      const [sources, availablePlugins, installedPlugins] = await Promise.all([
         getMarketplaceSources(),
         getAvailablePlugins(),
+        getInstalledPlugins(),
       ]);
 
       set({
         sources,
         availablePlugins,
+        installedPlugins,
         isRefreshing: false,
       });
     } catch (err) {
@@ -247,14 +249,16 @@ export const useMarketplaceStore = create<MarketplaceState>()((set, get) => ({
     try {
       await refreshMarketplace(sourceId);
       // Fetch updated data
-      const [sources, availablePlugins] = await Promise.all([
+      const [sources, availablePlugins, installedPlugins] = await Promise.all([
         getMarketplaceSources(),
         getAvailablePlugins(),
+        getInstalledPlugins(),
       ]);
 
       set({
         sources,
         availablePlugins,
+        installedPlugins,
         isRefreshing: false,
       });
     } catch (err) {

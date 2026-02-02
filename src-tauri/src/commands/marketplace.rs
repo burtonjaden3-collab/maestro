@@ -33,28 +33,24 @@ pub async fn load_marketplace_data(
 ) -> Result<(), String> {
     let store = app.store(MARKETPLACE_STORE).map_err(|e| e.to_string())?;
 
-    // Load sources
-    if let Some(sources_value) = store.get("sources") {
-        if let Ok(sources) = serde_json::from_value::<Vec<MarketplaceSource>>(sources_value) {
-            for source in sources {
-                // Re-add each source to restore state
-                let mut manager_sources = state.get_sources();
-                if !manager_sources.iter().any(|s| s.id == source.id) {
-                    // Directly manipulate via the internal method would be cleaner,
-                    // but for simplicity we use the existing add method
-                    // This is a simplified approach - the actual implementation
-                    // would need a way to restore sources with their original IDs
-                }
-            }
-        }
-    }
+    // Build MarketplaceData from stored values
+    let sources = store
+        .get("sources")
+        .and_then(|v| serde_json::from_value::<Vec<MarketplaceSource>>(v).ok())
+        .unwrap_or_default();
 
-    // Load installed plugins
-    if let Some(installed_value) = store.get("installed_plugins") {
-        if let Ok(_installed) = serde_json::from_value::<Vec<InstalledPlugin>>(installed_value) {
-            // Similarly, would need to restore installed plugins
-        }
-    }
+    let installed_plugins = store
+        .get("installed_plugins")
+        .and_then(|v| serde_json::from_value::<Vec<InstalledPlugin>>(v).ok())
+        .unwrap_or_default();
+
+    // Create JSON blob and load into manager
+    let data = MarketplaceData {
+        sources,
+        installed_plugins,
+    };
+    let json = serde_json::to_string(&data).map_err(|e| e.to_string())?;
+    state.load_from_json(&json).map_err(|e| e.to_string())?;
 
     Ok(())
 }

@@ -8,7 +8,9 @@ interface MarketplacePluginCardProps {
 }
 
 export function MarketplacePluginCard({ plugin, onInstall }: MarketplacePluginCardProps) {
-  const { isInstalled, getInstalledVersion, installingPluginId } = useMarketplaceStore();
+  // Subscribe to installedPlugins to ensure re-render when installation status changes
+  const { isInstalled, getInstalledVersion, installingPluginId, installedPlugins } = useMarketplaceStore();
+  void installedPlugins; // Ensure subscription triggers re-render
 
   const installed = isInstalled(plugin.id);
   const installedVersion = getInstalledVersion(plugin.id);

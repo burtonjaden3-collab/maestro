@@ -9,7 +9,9 @@ interface MarketplacePluginRowProps {
 }
 
 export function MarketplacePluginRow({ plugin, onInstall, onSelect }: MarketplacePluginRowProps) {
-  const { isInstalled, installingPluginId } = useMarketplaceStore();
+  // Subscribe to installedPlugins to ensure re-render when installation status changes
+  const { isInstalled, installingPluginId, installedPlugins } = useMarketplaceStore();
+  void installedPlugins; // Ensure subscription triggers re-render
 
   const installed = isInstalled(plugin.id);
   const isInstalling = installingPluginId === plugin.id;
