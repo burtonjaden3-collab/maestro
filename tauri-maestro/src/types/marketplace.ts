@@ -60,6 +60,8 @@ export interface MarketplacePlugin {
   download_url: string | null;
   /** Repository URL for cloning. */
   repository_url: string | null;
+  /** Subdirectory path within the repository (for monorepo plugins). */
+  source_path: string | null;
   /** Tags for additional filtering/search. */
   tags: string[];
   /** ID of the marketplace source this came from. */

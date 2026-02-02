@@ -116,6 +116,9 @@ pub struct MarketplacePlugin {
     pub download_url: Option<String>,
     /// Repository URL for cloning.
     pub repository_url: Option<String>,
+    /// Subdirectory path within the repository (for monorepo plugins).
+    /// When set, the plugin is located at this path within repository_url.
+    pub source_path: Option<String>,
     /// Tags for additional filtering/search.
     pub tags: Vec<String>,
     /// ID of the marketplace source this came from.
@@ -311,15 +314,20 @@ impl CatalogPlugin {
             .map(|a| a.name().to_string())
             .unwrap_or_else(|| "Unknown".to_string());
 
-        // Build repository URL: prefer explicit repository, then construct from source path
-        let repository_url = self.repository.or_else(|| {
-            self.source.as_ref().map(|source| {
-                // Convert relative source path to full GitHub URL
-                // e.g., "./plugins/agent-sdk-dev" -> "https://github.com/anthropics/claude-code/tree/main/plugins/agent-sdk-dev"
-                let source_path = source.trim_start_matches("./");
-                format!("{}/tree/main/{}", marketplace_repo_url.trim_end_matches('/'), source_path)
-            })
-        });
+        // Build repository URL and source_path:
+        // - If explicit repository is provided, use it directly (standalone repo)
+        // - If only source path is provided, use marketplace repo as base and store source_path
+        let (repository_url, source_path) = if let Some(repo) = self.repository {
+            // Explicit repository URL - standalone plugin repo
+            (Some(repo), None)
+        } else if let Some(source) = self.source.as_ref() {
+            // Plugin is within the marketplace repo (monorepo pattern)
+            // Store the base repo URL and the relative source path separately
+            let path = source.trim_start_matches("./").to_string();
+            (Some(marketplace_repo_url.trim_end_matches('/').to_string()), Some(path))
+        } else {
+            (None, None)
+        };
 
         MarketplacePlugin {
             id: plugin_id,
@@ -331,6 +339,7 @@ impl CatalogPlugin {
             types: self.types.iter().filter_map(|t| parse_plugin_type(t)).collect(),
             download_url: self.download_url,
             repository_url,
+            source_path,
             tags: self.tags,
             marketplace_id: marketplace_id.to_string(),
             icon_url: self.icon,
