@@ -95,9 +95,17 @@ Maestro runs multiple AI sessions in parallel. Each session gets its own termina
 - Rust (stable) via [rustup](https://rustup.rs)
 - System libraries:
 
+  **Ubuntu 22.04+ / Debian 12+:**
+  ```bash
+  sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+  ```
+
+  **Older distributions (Ubuntu 20.04, Debian 11):**
   ```bash
   sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libappindicator3-dev librsvg2-dev
   ```
+
+  > **Note:** Modern distributions use `libayatana-appindicator3-dev` (the maintained fork), while older ones use `libappindicator3-dev`. If one fails due to package conflicts, try the other.
 
 ### Steps
 
@@ -128,6 +136,30 @@ npm install -g @openai/codex                # OpenAI Codex
 
 - Biome ignores build output via `files.includes` negated globs in `biome.json`.
   If Biome changes ignore semantics in a future release, revisit that config.
+
+### GPU Acceleration
+
+By default, Maestro disables WebKitGTK's DMA-BUF renderer to ensure compatibility across different Linux GPU configurations. This prevents "GBM EGL display" errors that occur on some systems.
+
+**If you have a well-supported GPU (NVIDIA with proprietary drivers, AMD with Mesa, or Intel)**, you can enable hardware-accelerated rendering for improved performance:
+
+```bash
+# Run with GPU acceleration enabled
+WEBKIT_DISABLE_DMABUF_RENDERER=0 ./maestro-linux
+
+# Or for development
+WEBKIT_DISABLE_DMABUF_RENDERER=0 npm run tauri dev
+```
+
+To make this permanent, you can either:
+
+1. **Edit the source** - Remove or comment out the `WEBKIT_DISABLE_DMABUF_RENDERER` line in `src-tauri/src/main.rs`
+2. **Set a shell alias** - Add to your `.bashrc` or `.zshrc`:
+   ```bash
+   alias maestro='WEBKIT_DISABLE_DMABUF_RENDERER=0 /path/to/maestro-linux'
+   ```
+
+**Note:** If the app crashes or shows a blank window after enabling GPU acceleration, your system may not fully support DMA-BUF rendering. Revert to the default (software rendering) for stability.
 
 ---
 
