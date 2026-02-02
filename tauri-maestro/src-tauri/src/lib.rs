@@ -105,7 +105,8 @@ pub fn run() {
             commands::mcp::get_session_mcp_count,
             commands::mcp::save_project_mcp_defaults,
             commands::mcp::load_project_mcp_defaults,
-            commands::mcp::set_mcp_project_path,
+            commands::mcp::add_mcp_project,
+            commands::mcp::remove_mcp_project,
             commands::mcp::write_session_mcp_config,
             commands::mcp::remove_session_mcp_config,
             // Plugin commands

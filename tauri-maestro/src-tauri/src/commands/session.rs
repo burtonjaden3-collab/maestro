@@ -1,9 +1,11 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use tauri::State;
 
 use crate::core::mcp_config_writer;
 use crate::core::mcp_manager::McpManager;
+use crate::core::mcp_status_monitor::McpStatusMonitor;
 use crate::core::plugin_manager::PluginManager;
 use crate::core::process_manager::ProcessManager;
 use crate::core::session_manager::{AiMode, SessionConfig, SessionManager, SessionStatus};
@@ -92,6 +94,7 @@ pub async fn remove_sessions_for_project(
     state: State<'_, SessionManager>,
     process_manager: State<'_, ProcessManager>,
     mcp_manager: State<'_, McpManager>,
+    mcp_monitor: State<'_, Arc<McpStatusMonitor>>,
     plugin_manager: State<'_, PluginManager>,
     project_path: String,
 ) -> Result<Vec<SessionConfig>, String> {
@@ -127,6 +130,16 @@ pub async fn remove_sessions_for_project(
         if let Err(e) = process_manager.kill_session(session.id).await {
             log::warn!("Failed to kill PTY for session {}: {}", session.id, e);
         }
+    }
+
+    // If sessions were removed, stop monitoring this project
+    // (no more sessions exist for it)
+    if !removed.is_empty() {
+        mcp_monitor.remove_project(&canonical).await;
+        log::debug!(
+            "Removed project {} from MCP monitor (no more sessions)",
+            canonical
+        );
     }
 
     Ok(removed)

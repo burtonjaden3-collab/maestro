@@ -152,12 +152,13 @@ pub async fn load_project_mcp_defaults(
     Ok(result)
 }
 
-/// Sets the project path for the MCP status monitor to poll.
+/// Adds a project to the MCP status monitor for polling.
 ///
 /// This enables the monitor to watch for agent state files in the
 /// project-specific directory under `/tmp/maestro/agents/<hash>/`.
+/// Multiple projects can be monitored simultaneously.
 #[tauri::command]
-pub async fn set_mcp_project_path(
+pub async fn add_mcp_project(
     state: State<'_, Arc<McpStatusMonitor>>,
     project_path: String,
 ) -> Result<(), String> {
@@ -166,7 +167,25 @@ pub async fn set_mcp_project_path(
         .to_string_lossy()
         .into_owned();
 
-    state.set_project_path(&canonical).await;
+    state.add_project(&canonical).await;
+    Ok(())
+}
+
+/// Removes a project from the MCP status monitor.
+///
+/// Call this when all sessions for a project have been closed.
+/// Does nothing if the project wasn't being monitored.
+#[tauri::command]
+pub async fn remove_mcp_project(
+    state: State<'_, Arc<McpStatusMonitor>>,
+    project_path: String,
+) -> Result<(), String> {
+    let canonical = std::fs::canonicalize(&project_path)
+        .map_err(|e| format!("Invalid project path '{}': {}", project_path, e))?
+        .to_string_lossy()
+        .into_owned();
+
+    state.remove_project(&canonical).await;
     Ok(())
 }
 

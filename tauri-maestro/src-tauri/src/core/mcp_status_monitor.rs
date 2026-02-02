@@ -3,6 +3,9 @@
 //! Polls `/tmp/maestro/agents/<project_hash>/` for agent state JSON files
 //! written by the maestro-status MCP server. Emits `session-status-changed`
 //! events to the frontend when agent states change.
+//!
+//! Supports multiple projects simultaneously - each project is tracked
+//! independently so sessions in different projects don't interfere.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -47,24 +50,34 @@ impl AgentState {
 }
 
 /// Payload emitted to the frontend for status changes.
+/// Includes project_path to allow frontend filtering by project.
 #[derive(Debug, Clone, Serialize)]
 struct SessionStatusPayload {
     session_id: u32,
+    project_path: String,
     status: String,
     message: String,
     needs_input_prompt: Option<String>,
 }
 
 /// Monitors agent state files and emits events on status changes.
+/// Supports tracking multiple projects simultaneously.
 pub struct McpStatusMonitor {
     /// Base directory for agent state files.
     base_state_dir: PathBuf,
-    /// SHA256 hash (first 12 hex chars) of the current project path.
-    project_hash: Arc<RwLock<Option<String>>>,
-    /// Previous states keyed by agent ID for change detection.
-    previous_states: Arc<RwLock<HashMap<String, AgentStatusState>>>,
+    /// Active projects being monitored: project_path -> (hash, previous_states).
+    /// Each project maintains its own previous states for change detection.
+    active_projects: Arc<RwLock<HashMap<String, ProjectMonitorState>>>,
     /// Flag to stop the polling loop.
     running: Arc<RwLock<bool>>,
+}
+
+/// State tracked per project for change detection.
+struct ProjectMonitorState {
+    /// SHA256 hash (first 12 hex chars) of the project path.
+    hash: String,
+    /// Previous agent states keyed by agent ID.
+    previous_states: HashMap<String, AgentStatusState>,
 }
 
 impl McpStatusMonitor {
@@ -72,8 +85,7 @@ impl McpStatusMonitor {
     pub fn new() -> Self {
         Self {
             base_state_dir: PathBuf::from("/tmp/maestro/agents"),
-            project_hash: Arc::new(RwLock::new(None)),
-            previous_states: Arc::new(RwLock::new(HashMap::new())),
+            active_projects: Arc::new(RwLock::new(HashMap::new())),
             running: Arc::new(RwLock::new(false)),
         }
     }
@@ -89,26 +101,48 @@ impl McpStatusMonitor {
         hex::encode(&result[..6])
     }
 
-    /// Set the project path for scoped state directory monitoring.
-    pub async fn set_project_path(&self, project_path: &str) {
+    /// Add a project to be monitored.
+    /// Does nothing if the project is already being monitored.
+    pub async fn add_project(&self, project_path: &str) {
+        let mut projects = self.active_projects.write().await;
+        if projects.contains_key(project_path) {
+            log::debug!("Project already being monitored: {}", project_path);
+            return;
+        }
+
         let hash = Self::generate_project_hash(project_path);
         log::debug!(
-            "Setting MCP monitor project path: {} -> hash {}",
+            "Adding project to MCP monitor: {} -> hash {}",
             project_path,
             hash
         );
-        *self.project_hash.write().await = Some(hash);
-        // Clear previous states when switching projects
-        self.previous_states.write().await.clear();
+
+        projects.insert(
+            project_path.to_string(),
+            ProjectMonitorState {
+                hash,
+                previous_states: HashMap::new(),
+            },
+        );
     }
 
-    /// Get the effective state directory (project-scoped or base).
-    async fn state_dir(&self) -> PathBuf {
-        if let Some(hash) = self.project_hash.read().await.as_ref() {
-            self.base_state_dir.join(hash)
-        } else {
-            self.base_state_dir.clone()
+    /// Remove a project from monitoring.
+    /// Does nothing if the project wasn't being monitored.
+    pub async fn remove_project(&self, project_path: &str) {
+        let mut projects = self.active_projects.write().await;
+        if projects.remove(project_path).is_some() {
+            log::debug!("Removed project from MCP monitor: {}", project_path);
         }
+    }
+
+    /// Check if a project is currently being monitored.
+    pub async fn is_monitoring_project(&self, project_path: &str) -> bool {
+        self.active_projects.read().await.contains_key(project_path)
+    }
+
+    /// Get the number of projects currently being monitored.
+    pub async fn active_project_count(&self) -> usize {
+        self.active_projects.read().await.len()
     }
 
     /// Start the polling loop. Should be spawned as an async task.
@@ -124,9 +158,9 @@ impl McpStatusMonitor {
                 break;
             }
 
-            // Only poll if we have a project hash set
-            if self.project_hash.read().await.is_some() {
-                self.poll_and_emit(&app).await;
+            // Poll all active projects
+            if !self.active_projects.read().await.is_empty() {
+                self.poll_all_projects(&app).await;
             }
 
             // Wait 500ms before next poll
@@ -139,9 +173,34 @@ impl McpStatusMonitor {
         *self.running.write().await = false;
     }
 
-    /// Poll state files and emit events for changes.
-    async fn poll_and_emit(&self, app: &AppHandle) {
-        let state_dir = self.state_dir().await;
+    /// Poll all active projects and emit events for changes.
+    async fn poll_all_projects(&self, app: &AppHandle) {
+        // Get a snapshot of active projects to iterate over
+        let project_paths: Vec<String> = self
+            .active_projects
+            .read()
+            .await
+            .keys()
+            .cloned()
+            .collect();
+
+        for project_path in project_paths {
+            self.poll_project(&project_path, app).await;
+        }
+    }
+
+    /// Poll a single project's state files and emit events for changes.
+    async fn poll_project(&self, project_path: &str, app: &AppHandle) {
+        // Get the hash for this project
+        let hash = {
+            let projects = self.active_projects.read().await;
+            match projects.get(project_path) {
+                Some(state) => state.hash.clone(),
+                None => return, // Project was removed while iterating
+            }
+        };
+
+        let state_dir = self.base_state_dir.join(&hash);
 
         // Read directory contents
         let entries = match tokio::fs::read_dir(&state_dir).await {
@@ -178,10 +237,14 @@ impl McpStatusMonitor {
         }
 
         // Compare with previous states and emit events for changes
-        let mut previous = self.previous_states.write().await;
+        let mut projects = self.active_projects.write().await;
+        let project_state = match projects.get_mut(project_path) {
+            Some(state) => state,
+            None => return, // Project was removed while we were reading
+        };
 
         for (agent_id, agent_state) in &current_states {
-            let prev_state = previous.get(agent_id);
+            let prev_state = project_state.previous_states.get(agent_id);
             let changed = prev_state.map_or(true, |s| *s != agent_state.state);
 
             if changed {
@@ -197,14 +260,16 @@ impl McpStatusMonitor {
 
                     let payload = SessionStatusPayload {
                         session_id,
+                        project_path: project_path.to_string(),
                         status: status.to_string(),
                         message: agent_state.message.clone(),
                         needs_input_prompt: agent_state.needs_input_prompt.clone(),
                     };
 
                     log::debug!(
-                        "Emitting session-status-changed for session {}: {}",
+                        "Emitting session-status-changed for session {} in project {}: {}",
                         session_id,
+                        project_path,
                         status
                     );
 
@@ -215,8 +280,8 @@ impl McpStatusMonitor {
             }
         }
 
-        // Update previous states
-        *previous = current_states
+        // Update previous states for this project
+        project_state.previous_states = current_states
             .into_iter()
             .map(|(k, v)| (k, v.state))
             .collect();

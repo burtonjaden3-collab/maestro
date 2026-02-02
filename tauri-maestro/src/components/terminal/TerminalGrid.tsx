@@ -303,8 +303,8 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
       // Register the session in SessionManager (required before assigning branch)
       if (projectPath) {
         await createSession(sessionId, slot.mode, projectPath);
-        // Set project path for MCP status monitor to poll for status updates
-        await invoke("set_mcp_project_path", { projectPath });
+        // Add project to MCP status monitor for polling status updates
+        await invoke("add_mcp_project", { projectPath });
       }
 
       // Assign the branch to the session so the header displays it

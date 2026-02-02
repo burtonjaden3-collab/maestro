@@ -41,6 +41,7 @@ export interface SessionConfig {
 /** Shape of the Tauri `session-status-changed` event payload. */
 interface SessionStatusPayload {
   session_id: number;
+  project_path: string;
   status: BackendSessionStatus;
   message?: string;
   needs_input_prompt?: string;
@@ -138,10 +139,12 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
       if (!activeUnlisten) {
         if (!pendingInit) {
           pendingInit = listen<SessionStatusPayload>("session-status-changed", (event) => {
-            const { session_id, status, message, needs_input_prompt } = event.payload;
+            const { session_id, project_path, status, message, needs_input_prompt } = event.payload;
             set((state) => ({
               sessions: state.sessions.map((s) =>
-                s.id === session_id
+                // Only update if both session ID AND project path match
+                // This prevents cross-project status pollution
+                s.id === session_id && s.project_path === project_path
                   ? {
                       ...s,
                       status,
