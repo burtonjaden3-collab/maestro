@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 
 import { invoke } from "@tauri-apps/api/core";
 
@@ -15,6 +15,7 @@ import {
   writeStdin,
 } from "@/lib/terminal";
 import { cleanupSessionWorktree, prepareSessionWorktree } from "@/lib/worktreeManager";
+import { useTerminalKeyboard } from "@/hooks/useTerminalKeyboard";
 import { useMcpStore } from "@/stores/useMcpStore";
 import { usePluginStore } from "@/stores/usePluginStore";
 import { useSessionStore } from "@/stores/useSessionStore";
@@ -132,6 +133,9 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
   const [slots, setSlots] = useState<SessionSlot[]>(() => [createEmptySlot()]);
   const [error, setError] = useState<string | null>(null);
 
+  // Track which terminal slot is focused (by slot ID)
+  const [focusedSlotId, setFocusedSlotId] = useState<string | null>(null);
+
   // Git branch data
   const [branches, setBranches] = useState<BranchWithWorktreeStatus[]>([]);
   const [isLoadingBranches, setIsLoadingBranches] = useState(false);
@@ -140,6 +144,43 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
   // Refs for cleanup
   const slotsRef = useRef<SessionSlot[]>([]);
   const mounted = useRef(false);
+
+  // Compute launched slots for keyboard navigation
+  const launchedSlots = useMemo(
+    () => slots.filter((s) => s.sessionId !== null),
+    [slots]
+  );
+
+  // Map focusedSlotId to an index in launchedSlots
+  const focusedIndex = useMemo(() => {
+    if (!focusedSlotId) return null;
+    const idx = launchedSlots.findIndex((s) => s.id === focusedSlotId);
+    return idx >= 0 ? idx : null;
+  }, [focusedSlotId, launchedSlots]);
+
+  // Terminal keyboard navigation hook
+  useTerminalKeyboard({
+    terminalCount: launchedSlots.length,
+    focusedIndex,
+    onFocusTerminal: useCallback((index: number) => {
+      const slot = launchedSlots[index];
+      if (slot) {
+        setFocusedSlotId(slot.id);
+      }
+    }, [launchedSlots]),
+    onCycleNext: useCallback(() => {
+      if (launchedSlots.length === 0) return;
+      const currentIdx = focusedIndex ?? -1;
+      const nextIdx = (currentIdx + 1) % launchedSlots.length;
+      setFocusedSlotId(launchedSlots[nextIdx].id);
+    }, [launchedSlots, focusedIndex]),
+    onCyclePrevious: useCallback(() => {
+      if (launchedSlots.length === 0) return;
+      const currentIdx = focusedIndex ?? 0;
+      const prevIdx = (currentIdx - 1 + launchedSlots.length) % launchedSlots.length;
+      setFocusedSlotId(launchedSlots[prevIdx].id);
+    }, [launchedSlots, focusedIndex]),
+  });
 
   // Sync refs with state and report counts to parent
   useEffect(() => {
@@ -439,6 +480,58 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
   }, []);
 
   /**
+   * Selects all MCP servers for a slot.
+   */
+  const selectAllMcp = useCallback((slotId: string) => {
+    setSlots((prev) =>
+      prev.map((s) => {
+        if (s.id !== slotId) return s;
+        return { ...s, enabledMcpServers: mcpServers.map((server) => server.name) };
+      })
+    );
+  }, [mcpServers]);
+
+  /**
+   * Unselects all MCP servers for a slot.
+   */
+  const unselectAllMcp = useCallback((slotId: string) => {
+    setSlots((prev) =>
+      prev.map((s) => {
+        if (s.id !== slotId) return s;
+        return { ...s, enabledMcpServers: [] };
+      })
+    );
+  }, []);
+
+  /**
+   * Selects all plugins and skills for a slot.
+   */
+  const selectAllPlugins = useCallback((slotId: string) => {
+    setSlots((prev) =>
+      prev.map((s) => {
+        if (s.id !== slotId) return s;
+        return {
+          ...s,
+          enabledPlugins: plugins.map((p) => p.id),
+          enabledSkills: skills.map((sk) => sk.id),
+        };
+      })
+    );
+  }, [plugins, skills]);
+
+  /**
+   * Unselects all plugins and skills for a slot.
+   */
+  const unselectAllPlugins = useCallback((slotId: string) => {
+    setSlots((prev) =>
+      prev.map((s) => {
+        if (s.id !== slotId) return s;
+        return { ...s, enabledPlugins: [], enabledSkills: [] };
+      })
+    );
+  }, []);
+
+  /**
    * Toggles a plugin for a slot.
    * Also toggles all skills belonging to that plugin.
    */
@@ -535,7 +628,13 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
     <div className={`grid h-full ${gridClass(slots.length)} gap-2 bg-maestro-bg p-2`}>
       {slots.map((slot) =>
         slot.sessionId !== null ? (
-          <TerminalView key={slot.id} sessionId={slot.sessionId} onKill={handleKill} />
+          <TerminalView
+            key={slot.id}
+            sessionId={slot.sessionId}
+            isFocused={focusedSlotId === slot.id}
+            onFocus={() => setFocusedSlotId(slot.id)}
+            onKill={handleKill}
+          />
         ) : (
           <PreLaunchCard
             key={slot.id}
@@ -552,6 +651,10 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
             onMcpToggle={(serverName) => toggleSlotMcp(slot.id, serverName)}
             onSkillToggle={(skillId) => toggleSlotSkill(slot.id, skillId)}
             onPluginToggle={(pluginId) => toggleSlotPlugin(slot.id, pluginId)}
+            onMcpSelectAll={() => selectAllMcp(slot.id)}
+            onMcpUnselectAll={() => unselectAllMcp(slot.id)}
+            onPluginsSelectAll={() => selectAllPlugins(slot.id)}
+            onPluginsUnselectAll={() => unselectAllPlugins(slot.id)}
             onLaunch={() => launchSlot(slot.id)}
             onRemove={() => removeSlot(slot.id)}
           />

@@ -16,11 +16,15 @@ import { type AIProvider, type SessionStatus, TerminalHeader } from "./TerminalH
  * Props for {@link TerminalView}.
  * @property sessionId - Backend PTY session ID used to route stdin/stdout and resize events.
  * @property status - Fallback status used only when the session store has no entry yet.
+ * @property isFocused - Whether this terminal is currently focused (shows accent ring).
+ * @property onFocus - Callback when the terminal is clicked/focused.
  * @property onKill - Callback invoked after the backend kill IPC completes (or fails).
  */
 interface TerminalViewProps {
   sessionId: number;
   status?: SessionStatus;
+  isFocused?: boolean;
+  onFocus?: () => void;
   onKill: (sessionId: number) => void;
 }
 
@@ -88,7 +92,7 @@ function cellStatusClass(status: SessionStatus): string {
  * ResizeObserver, disposes xterm listeners, unsubscribes the Tauri event listener
  * (even if the listener promise hasn't resolved yet), and destroys the Terminal.
  */
-export function TerminalView({ sessionId, status = "idle", onKill }: TerminalViewProps) {
+export function TerminalView({ sessionId, status = "idle", isFocused = false, onFocus, onKill }: TerminalViewProps) {
   const sessionConfig = useSessionStore((s) => s.sessions.find((sess) => sess.id === sessionId));
   const effectiveStatus = sessionConfig ? mapStatus(sessionConfig.status) : status;
   const effectiveProvider = sessionConfig ? mapAiMode(sessionConfig.mode) : "claude";
@@ -215,6 +219,16 @@ export function TerminalView({ sessionId, status = "idle", onKill }: TerminalVie
       resizePty(sessionId, rows, cols).catch(console.error);
     });
 
+    // Handle Shift+Enter to insert a literal newline without submitting
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.key === "Enter" && event.shiftKey && event.type === "keydown") {
+        // Send a literal newline character
+        writeStdin(sessionId, "\n").catch(console.error);
+        return false; // Don't let xterm process it
+      }
+      return true; // Let xterm handle all other keys
+    });
+
     let disposed = false;
     let unlisten: (() => void) | null = null;
     const listenerReady = onPtyOutput(sessionId, (data) => {
@@ -261,9 +275,17 @@ export function TerminalView({ sessionId, status = "idle", onKill }: TerminalVie
     };
   }, [sessionId]);
 
+  // Focus the terminal when isFocused becomes true
+  useEffect(() => {
+    if (isFocused && termRef.current) {
+      termRef.current.focus();
+    }
+  }, [isFocused]);
+
   return (
     <div
-      className={`terminal-cell flex h-full flex-col bg-maestro-bg ${cellStatusClass(effectiveStatus)}`}
+      className={`terminal-cell flex h-full flex-col bg-maestro-bg ${cellStatusClass(effectiveStatus)} ${isFocused ? "ring-2 ring-maestro-accent ring-inset" : ""}`}
+      onClick={onFocus}
     >
       {/* Rich header bar */}
       <TerminalHeader

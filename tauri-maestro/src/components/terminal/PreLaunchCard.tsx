@@ -8,6 +8,7 @@ import {
   GitBranch,
   Package,
   Play,
+  Search,
   Server,
   Sparkles,
   Store,
@@ -78,6 +79,10 @@ interface PreLaunchCardProps {
   onMcpToggle: (serverName: string) => void;
   onSkillToggle: (skillId: string) => void;
   onPluginToggle: (pluginId: string) => void;
+  onMcpSelectAll: () => void;
+  onMcpUnselectAll: () => void;
+  onPluginsSelectAll: () => void;
+  onPluginsUnselectAll: () => void;
   onLaunch: () => void;
   onRemove: () => void;
 }
@@ -106,6 +111,10 @@ export function PreLaunchCard({
   onMcpToggle,
   onSkillToggle,
   onPluginToggle,
+  onMcpSelectAll,
+  onMcpUnselectAll,
+  onPluginsSelectAll,
+  onPluginsUnselectAll,
   onLaunch,
   onRemove,
 }: PreLaunchCardProps) {
@@ -114,6 +123,8 @@ export function PreLaunchCard({
   const [mcpDropdownOpen, setMcpDropdownOpen] = useState(false);
   const [pluginsSkillsDropdownOpen, setPluginsSkillsDropdownOpen] = useState(false);
   const [expandedPlugins, setExpandedPlugins] = useState<Set<string>>(new Set());
+  const [mcpSearchQuery, setMcpSearchQuery] = useState("");
+  const [pluginsSearchQuery, setPluginsSearchQuery] = useState("");
   const modeDropdownRef = useRef<HTMLDivElement>(null);
   const branchDropdownRef = useRef<HTMLDivElement>(null);
   const mcpDropdownRef = useRef<HTMLDivElement>(null);
@@ -425,35 +436,91 @@ export function PreLaunchCard({
               </button>
 
               {mcpDropdownOpen && (
-                <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-48 overflow-y-auto rounded border border-maestro-border bg-maestro-card shadow-lg">
-                  {mcpServers.map((server) => {
-                    const isEnabled = slot.enabledMcpServers.includes(server.name);
-                    const serverType = server.type;
-                    return (
+                <div className="absolute left-0 right-0 top-full z-10 mt-1 rounded border border-maestro-border bg-maestro-card shadow-lg">
+                  {/* Search input */}
+                  <div className="border-b border-maestro-border p-2">
+                    <div className="relative">
+                      <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-maestro-muted" />
+                      <input
+                        type="text"
+                        placeholder="Search servers..."
+                        value={mcpSearchQuery}
+                        onChange={(e) => setMcpSearchQuery(e.target.value)}
+                        className="w-full rounded border border-maestro-border bg-maestro-surface py-1.5 pl-7 pr-2 text-xs text-maestro-text placeholder:text-maestro-muted focus:border-maestro-accent focus:outline-none"
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    </div>
+                  </div>
+                  {/* Select All / Unselect All buttons */}
+                  <div className="flex items-center justify-between border-b border-maestro-border px-2 py-1.5">
+                    <div className="flex gap-1">
                       <button
-                        key={server.name}
                         type="button"
-                        onClick={() => onMcpToggle(server.name)}
-                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-maestro-surface"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onMcpSelectAll();
+                        }}
+                        className="rounded bg-maestro-surface px-2 py-0.5 text-[10px] text-maestro-muted transition-colors hover:bg-maestro-border hover:text-maestro-text"
                       >
-                        <span
-                          className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
-                            isEnabled
-                              ? "border-maestro-green bg-maestro-green"
-                              : "border-maestro-border bg-transparent"
-                          }`}
-                        >
-                          {isEnabled && <Check size={12} className="text-white" />}
-                        </span>
-                        <span className={isEnabled ? "text-maestro-text" : "text-maestro-muted"}>
-                          {server.name}
-                        </span>
-                        <span className="ml-auto text-[10px] text-maestro-muted/60">
-                          {serverType}
-                        </span>
+                        Select All
                       </button>
-                    );
-                  })}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onMcpUnselectAll();
+                        }}
+                        className="rounded bg-maestro-surface px-2 py-0.5 text-[10px] text-maestro-muted transition-colors hover:bg-maestro-border hover:text-maestro-text"
+                      >
+                        Unselect All
+                      </button>
+                    </div>
+                    <span className="text-[10px] text-maestro-muted">
+                      {enabledCount}/{totalCount}
+                    </span>
+                  </div>
+                  {/* Server list */}
+                  <div className="max-h-36 overflow-y-auto">
+                    {mcpServers
+                      .filter((server) =>
+                        server.name.toLowerCase().includes(mcpSearchQuery.toLowerCase())
+                      )
+                      .map((server) => {
+                        const isEnabled = slot.enabledMcpServers.includes(server.name);
+                        const serverType = server.type;
+                        return (
+                          <button
+                            key={server.name}
+                            type="button"
+                            onClick={() => onMcpToggle(server.name)}
+                            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-maestro-surface"
+                          >
+                            <span
+                              className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                                isEnabled
+                                  ? "border-maestro-green bg-maestro-green"
+                                  : "border-maestro-border bg-transparent"
+                              }`}
+                            >
+                              {isEnabled && <Check size={12} className="text-white" />}
+                            </span>
+                            <span className={isEnabled ? "text-maestro-text" : "text-maestro-muted"}>
+                              {server.name}
+                            </span>
+                            <span className="ml-auto text-[10px] text-maestro-muted/60">
+                              {serverType}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    {mcpServers.filter((server) =>
+                      server.name.toLowerCase().includes(mcpSearchQuery.toLowerCase())
+                    ).length === 0 && (
+                      <div className="px-3 py-2 text-center text-xs text-maestro-muted">
+                        No servers match "{mcpSearchQuery}"
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </>
@@ -487,139 +554,224 @@ export function PreLaunchCard({
               </button>
 
               {pluginsSkillsDropdownOpen && (
-                <div className="absolute left-0 right-0 top-full z-10 mt-1 max-h-64 overflow-y-auto rounded border border-maestro-border bg-maestro-card shadow-lg">
-                  {/* Plugins with their skills */}
-                  {plugins.length > 0 && (
-                    <>
-                      <div className="border-b border-maestro-border px-3 py-1.5 text-[9px] font-medium uppercase tracking-wide text-maestro-muted">
-                        Plugins ({plugins.length})
-                      </div>
-                      {plugins.map((plugin) => {
-                        const isPluginEnabled = slot.enabledPlugins.includes(plugin.id);
-                        const pluginSkills = pluginSkillsMap.get(plugin.name) ?? [];
-                        const isExpanded = expandedPlugins.has(plugin.id);
-                        const hasSkillsToShow = pluginSkills.length > 0;
+                <div className="absolute left-0 right-0 top-full z-10 mt-1 rounded border border-maestro-border bg-maestro-card shadow-lg">
+                  {/* Search input */}
+                  <div className="border-b border-maestro-border p-2">
+                    <div className="relative">
+                      <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-maestro-muted" />
+                      <input
+                        type="text"
+                        placeholder="Search plugins & skills..."
+                        value={pluginsSearchQuery}
+                        onChange={(e) => setPluginsSearchQuery(e.target.value)}
+                        className="w-full rounded border border-maestro-border bg-maestro-surface py-1.5 pl-7 pr-2 text-xs text-maestro-text placeholder:text-maestro-muted focus:border-maestro-accent focus:outline-none"
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    </div>
+                  </div>
+                  {/* Select All / Unselect All buttons */}
+                  <div className="flex items-center justify-between border-b border-maestro-border px-2 py-1.5">
+                    <div className="flex gap-1">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onPluginsSelectAll();
+                        }}
+                        className="rounded bg-maestro-surface px-2 py-0.5 text-[10px] text-maestro-muted transition-colors hover:bg-maestro-border hover:text-maestro-text"
+                      >
+                        Select All
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onPluginsUnselectAll();
+                        }}
+                        className="rounded bg-maestro-surface px-2 py-0.5 text-[10px] text-maestro-muted transition-colors hover:bg-maestro-border hover:text-maestro-text"
+                      >
+                        Unselect All
+                      </button>
+                    </div>
+                    <span className="text-[10px] text-maestro-muted">
+                      {enabledPluginsCount}P / {enabledSkillsCount}S
+                    </span>
+                  </div>
+                  {/* Scrollable content */}
+                  <div className="max-h-52 overflow-y-auto">
+                    {/* Plugins with their skills */}
+                    {plugins.length > 0 && (
+                      <>
+                        <div className="border-b border-maestro-border px-3 py-1.5 text-[9px] font-medium uppercase tracking-wide text-maestro-muted">
+                          Plugins ({plugins.length})
+                        </div>
+                        {plugins
+                          .filter((plugin) => {
+                            if (!pluginsSearchQuery) return true;
+                            const query = pluginsSearchQuery.toLowerCase();
+                            // Match plugin name
+                            if (plugin.name.toLowerCase().includes(query)) return true;
+                            // Match any skill name within the plugin
+                            const pluginSkills = pluginSkillsMap.get(plugin.name) ?? [];
+                            return pluginSkills.some((skill) =>
+                              skill.name.toLowerCase().includes(query)
+                            );
+                          })
+                          .map((plugin) => {
+                            const isPluginEnabled = slot.enabledPlugins.includes(plugin.id);
+                            const pluginSkills = pluginSkillsMap.get(plugin.name) ?? [];
+                            const isExpanded = expandedPlugins.has(plugin.id);
+                            const hasSkillsToShow = pluginSkills.length > 0;
 
-                        return (
-                          <div key={plugin.id}>
-                            {/* Plugin row */}
-                            <div className="flex items-center gap-1 px-2 py-1.5 hover:bg-maestro-surface">
-                              {/* Expand/collapse button */}
-                              {hasSkillsToShow ? (
-                                <button
-                                  type="button"
-                                  onClick={() => togglePluginExpanded(plugin.id)}
-                                  className="shrink-0 rounded p-0.5 hover:bg-maestro-border/40"
-                                >
-                                  {isExpanded ? (
-                                    <ChevronDown size={12} className="text-maestro-muted" />
+                            // Filter skills by search query
+                            const filteredPluginSkills = pluginsSearchQuery
+                              ? pluginSkills.filter((skill) =>
+                                  skill.name.toLowerCase().includes(pluginsSearchQuery.toLowerCase())
+                                )
+                              : pluginSkills;
+
+                            return (
+                              <div key={plugin.id}>
+                                {/* Plugin row */}
+                                <div className="flex items-center gap-1 px-2 py-1.5 hover:bg-maestro-surface">
+                                  {/* Expand/collapse button */}
+                                  {hasSkillsToShow ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => togglePluginExpanded(plugin.id)}
+                                      className="shrink-0 rounded p-0.5 hover:bg-maestro-border/40"
+                                    >
+                                      {isExpanded ? (
+                                        <ChevronDown size={12} className="text-maestro-muted" />
+                                      ) : (
+                                        <ChevronRight size={12} className="text-maestro-muted" />
+                                      )}
+                                    </button>
                                   ) : (
-                                    <ChevronRight size={12} className="text-maestro-muted" />
+                                    <span className="w-5" />
                                   )}
-                                </button>
-                              ) : (
-                                <span className="w-5" />
-                              )}
-                              {/* Plugin checkbox */}
+                                  {/* Plugin checkbox */}
+                                  <button
+                                    type="button"
+                                    onClick={() => onPluginToggle(plugin.id)}
+                                    className="flex flex-1 items-center gap-2 text-left text-sm"
+                                  >
+                                    <span
+                                      className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                                        isPluginEnabled
+                                          ? "border-maestro-purple bg-maestro-purple"
+                                          : "border-maestro-border bg-transparent"
+                                      }`}
+                                    >
+                                      {isPluginEnabled && <Check size={12} className="text-white" />}
+                                    </span>
+                                    <Package size={12} className="shrink-0 text-maestro-purple" />
+                                    <span className={`flex-1 truncate ${isPluginEnabled ? "text-maestro-text" : "text-maestro-muted"}`}>
+                                      {plugin.name}
+                                    </span>
+                                    {hasSkillsToShow && (
+                                      <span className="text-[10px] text-maestro-muted">{pluginSkills.length}</span>
+                                    )}
+                                    <span className="text-[10px] text-maestro-muted/60">v{plugin.version}</span>
+                                  </button>
+                                </div>
+                                {/* Expanded skills */}
+                                {isExpanded && hasSkillsToShow && (
+                                  <div className="ml-5 border-l border-maestro-border/40 pl-2">
+                                    {(pluginsSearchQuery ? filteredPluginSkills : pluginSkills).map((skill) => {
+                                      const isSkillEnabled = slot.enabledSkills.includes(skill.id);
+                                      return (
+                                        <button
+                                          key={skill.id}
+                                          type="button"
+                                          onClick={() => onSkillToggle(skill.id)}
+                                          className="flex w-full items-center gap-2 px-2 py-1 text-left text-sm transition-colors hover:bg-maestro-surface"
+                                          title={skill.description || undefined}
+                                        >
+                                          <span
+                                            className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border ${
+                                              isSkillEnabled
+                                                ? "border-maestro-orange bg-maestro-orange"
+                                                : "border-maestro-border bg-transparent"
+                                            }`}
+                                          >
+                                            {isSkillEnabled && <Check size={10} className="text-white" />}
+                                          </span>
+                                          <Zap size={11} className="shrink-0 text-maestro-orange" />
+                                          <span className={`flex-1 truncate text-xs ${isSkillEnabled ? "text-maestro-text" : "text-maestro-muted"}`}>
+                                            {skill.name}
+                                          </span>
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                      </>
+                    )}
+
+                    {/* Standalone Skills */}
+                    {standaloneSkills.length > 0 && (
+                      <>
+                        <div className="border-b border-t border-maestro-border px-3 py-1.5 text-[9px] font-medium uppercase tracking-wide text-maestro-muted">
+                          Skills ({standaloneSkills.length})
+                        </div>
+                        {standaloneSkills
+                          .filter((skill) =>
+                            !pluginsSearchQuery ||
+                            skill.name.toLowerCase().includes(pluginsSearchQuery.toLowerCase())
+                          )
+                          .map((skill) => {
+                            const isEnabled = slot.enabledSkills.includes(skill.id);
+                            const sourceLabel = getSkillSourceLabel(skill.source);
+                            return (
                               <button
+                                key={skill.id}
                                 type="button"
-                                onClick={() => onPluginToggle(plugin.id)}
-                                className="flex flex-1 items-center gap-2 text-left text-sm"
+                                onClick={() => onSkillToggle(skill.id)}
+                                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-maestro-surface"
+                                title={skill.description || undefined}
                               >
                                 <span
                                   className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
-                                    isPluginEnabled
-                                      ? "border-maestro-purple bg-maestro-purple"
+                                    isEnabled
+                                      ? "border-maestro-orange bg-maestro-orange"
                                       : "border-maestro-border bg-transparent"
                                   }`}
                                 >
-                                  {isPluginEnabled && <Check size={12} className="text-white" />}
+                                  {isEnabled && <Check size={12} className="text-white" />}
                                 </span>
-                                <Package size={12} className="shrink-0 text-maestro-purple" />
-                                <span className={`flex-1 truncate ${isPluginEnabled ? "text-maestro-text" : "text-maestro-muted"}`}>
-                                  {plugin.name}
+                                <Zap size={12} className="shrink-0 text-maestro-orange" />
+                                <span className={`flex-1 truncate ${isEnabled ? "text-maestro-text" : "text-maestro-muted"}`}>
+                                  {skill.name}
                                 </span>
-                                {hasSkillsToShow && (
-                                  <span className="text-[10px] text-maestro-muted">{pluginSkills.length}</span>
-                                )}
-                                <span className="text-[10px] text-maestro-muted/60">v{plugin.version}</span>
+                                <span className={`shrink-0 rounded px-1 text-[9px] ${sourceLabel.className}`}>
+                                  {sourceLabel.text}
+                                </span>
                               </button>
-                            </div>
-                            {/* Expanded skills */}
-                            {isExpanded && hasSkillsToShow && (
-                              <div className="ml-5 border-l border-maestro-border/40 pl-2">
-                                {pluginSkills.map((skill) => {
-                                  const isSkillEnabled = slot.enabledSkills.includes(skill.id);
-                                  return (
-                                    <button
-                                      key={skill.id}
-                                      type="button"
-                                      onClick={() => onSkillToggle(skill.id)}
-                                      className="flex w-full items-center gap-2 px-2 py-1 text-left text-sm transition-colors hover:bg-maestro-surface"
-                                      title={skill.description || undefined}
-                                    >
-                                      <span
-                                        className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border ${
-                                          isSkillEnabled
-                                            ? "border-maestro-orange bg-maestro-orange"
-                                            : "border-maestro-border bg-transparent"
-                                        }`}
-                                      >
-                                        {isSkillEnabled && <Check size={10} className="text-white" />}
-                                      </span>
-                                      <Zap size={11} className="shrink-0 text-maestro-orange" />
-                                      <span className={`flex-1 truncate text-xs ${isSkillEnabled ? "text-maestro-text" : "text-maestro-muted"}`}>
-                                        {skill.name}
-                                      </span>
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </>
-                  )}
+                            );
+                          })}
+                      </>
+                    )}
 
-                  {/* Standalone Skills */}
-                  {standaloneSkills.length > 0 && (
-                    <>
-                      <div className="border-b border-t border-maestro-border px-3 py-1.5 text-[9px] font-medium uppercase tracking-wide text-maestro-muted">
-                        Skills ({standaloneSkills.length})
+                    {/* No results message */}
+                    {pluginsSearchQuery &&
+                     plugins.filter((plugin) => {
+                       const query = pluginsSearchQuery.toLowerCase();
+                       if (plugin.name.toLowerCase().includes(query)) return true;
+                       const pluginSkills = pluginSkillsMap.get(plugin.name) ?? [];
+                       return pluginSkills.some((skill) => skill.name.toLowerCase().includes(query));
+                     }).length === 0 &&
+                     standaloneSkills.filter((skill) =>
+                       skill.name.toLowerCase().includes(pluginsSearchQuery.toLowerCase())
+                     ).length === 0 && (
+                      <div className="px-3 py-2 text-center text-xs text-maestro-muted">
+                        No results match "{pluginsSearchQuery}"
                       </div>
-                      {standaloneSkills.map((skill) => {
-                        const isEnabled = slot.enabledSkills.includes(skill.id);
-                        const sourceLabel = getSkillSourceLabel(skill.source);
-                        return (
-                          <button
-                            key={skill.id}
-                            type="button"
-                            onClick={() => onSkillToggle(skill.id)}
-                            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-maestro-surface"
-                            title={skill.description || undefined}
-                          >
-                            <span
-                              className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
-                                isEnabled
-                                  ? "border-maestro-orange bg-maestro-orange"
-                                  : "border-maestro-border bg-transparent"
-                              }`}
-                            >
-                              {isEnabled && <Check size={12} className="text-white" />}
-                            </span>
-                            <Zap size={12} className="shrink-0 text-maestro-orange" />
-                            <span className={`flex-1 truncate ${isEnabled ? "text-maestro-text" : "text-maestro-muted"}`}>
-                              {skill.name}
-                            </span>
-                            <span className={`shrink-0 rounded px-1 text-[9px] ${sourceLabel.className}`}>
-                              {sourceLabel.text}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </>
-                  )}
+                    )}
+                  </div>
                 </div>
               )}
             </>
