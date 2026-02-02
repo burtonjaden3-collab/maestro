@@ -303,13 +303,30 @@ impl MarketplaceManager {
     }
 
     /// Clones a repository using git.
-    async fn clone_repository(repo_url: &str, target_dir: &Path) -> MarketplaceResult<()> {
+    ///
+    /// If `source_path` is provided, uses sparse checkout to clone only the
+    /// specified subdirectory (for monorepo plugins).
+    async fn clone_repository(
+        repo_url: &str,
+        target_dir: &Path,
+        source_path: Option<&str>,
+    ) -> MarketplaceResult<()> {
         // Ensure parent directory exists
         if let Some(parent) = target_dir.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        // Clone with depth 1 for efficiency
+        if let Some(subpath) = source_path {
+            // Sparse checkout for subdirectory within a monorepo
+            Self::clone_sparse(repo_url, target_dir, subpath).await
+        } else {
+            // Simple shallow clone for standalone repos
+            Self::clone_shallow(repo_url, target_dir).await
+        }
+    }
+
+    /// Performs a shallow clone of the entire repository.
+    async fn clone_shallow(repo_url: &str, target_dir: &Path) -> MarketplaceResult<()> {
         let output = Command::new("git")
             .args(["clone", "--depth", "1", repo_url])
             .arg(target_dir)
@@ -321,6 +338,103 @@ impl MarketplaceManager {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(MarketplaceError::CloneError(stderr.to_string()));
         }
+
+        Ok(())
+    }
+
+    /// Performs a sparse checkout to clone only a specific subdirectory.
+    ///
+    /// This is used for plugins that are subdirectories within a larger monorepo
+    /// (e.g., anthropics/claude-code/plugins/frontend-design).
+    async fn clone_sparse(repo_url: &str, target_dir: &Path, subpath: &str) -> MarketplaceResult<()> {
+        // Create a temporary directory for the sparse checkout
+        let temp_dir = target_dir.with_file_name(format!(
+            ".{}-sparse-temp",
+            target_dir.file_name().unwrap_or_default().to_string_lossy()
+        ));
+
+        // Clean up any existing temp directory
+        if temp_dir.exists() {
+            tokio::fs::remove_dir_all(&temp_dir).await?;
+        }
+
+        // Step 1: Clone with no checkout and blob filter for efficiency
+        let output = Command::new("git")
+            .args([
+                "clone",
+                "--filter=blob:none",
+                "--no-checkout",
+                "--depth",
+                "1",
+                repo_url,
+            ])
+            .arg(&temp_dir)
+            .output()
+            .await
+            .map_err(|e| MarketplaceError::CloneError(format!("Failed to run git clone: {}", e)))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+            return Err(MarketplaceError::CloneError(format!(
+                "git clone failed: {}",
+                stderr
+            )));
+        }
+
+        // Step 2: Set up sparse checkout for the specific subdirectory
+        let output = Command::new("git")
+            .args(["sparse-checkout", "set", "--no-cone", subpath])
+            .current_dir(&temp_dir)
+            .output()
+            .await
+            .map_err(|e| {
+                MarketplaceError::CloneError(format!("Failed to run git sparse-checkout: {}", e))
+            })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+            return Err(MarketplaceError::CloneError(format!(
+                "git sparse-checkout failed: {}",
+                stderr
+            )));
+        }
+
+        // Step 3: Checkout the files
+        let output = Command::new("git")
+            .args(["checkout"])
+            .current_dir(&temp_dir)
+            .output()
+            .await
+            .map_err(|e| MarketplaceError::CloneError(format!("Failed to run git checkout: {}", e)))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+            return Err(MarketplaceError::CloneError(format!(
+                "git checkout failed: {}",
+                stderr
+            )));
+        }
+
+        // Step 4: Move the subdirectory contents to the target directory
+        let source_subdir = temp_dir.join(subpath);
+        if !source_subdir.exists() {
+            let _ = tokio::fs::remove_dir_all(&temp_dir).await;
+            return Err(MarketplaceError::CloneError(format!(
+                "Subdirectory '{}' not found in repository",
+                subpath
+            )));
+        }
+
+        // Rename the subdirectory to the target location
+        tokio::fs::rename(&source_subdir, target_dir).await.map_err(|e| {
+            MarketplaceError::CloneError(format!("Failed to move plugin directory: {}", e))
+        })?;
+
+        // Clean up the temporary directory
+        let _ = tokio::fs::remove_dir_all(&temp_dir).await;
 
         Ok(())
     }
@@ -447,8 +561,8 @@ impl MarketplaceManager {
         let plugin_dir_name = plugin.id.replace('/', "-");
         let plugin_dir = install_base.join(&plugin_dir_name);
 
-        // Clone the repository
-        Self::clone_repository(repo_url, &plugin_dir).await?;
+        // Clone the repository (with sparse checkout for monorepo plugins)
+        Self::clone_repository(repo_url, &plugin_dir, plugin.source_path.as_deref()).await?;
 
         // Create plugin manifest directory
         let manifest_dir = plugin_dir.join(".claude-plugin");
