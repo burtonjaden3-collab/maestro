@@ -1,10 +1,15 @@
 //! IPC commands for MCP server discovery and session configuration.
 
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, State};
 use tauri_plugin_store::StoreExt;
 
+use crate::core::mcp_config_writer;
 use crate::core::mcp_manager::{McpManager, McpServerConfig};
+use crate::core::mcp_status_monitor::McpStatusMonitor;
 
 /// Creates a stable hash of a project path for use in store filenames.
 fn hash_project_path(path: &str) -> String {
@@ -145,4 +150,84 @@ pub async fn load_project_mcp_defaults(
         });
 
     Ok(result)
+}
+
+/// Sets the project path for the MCP status monitor to poll.
+///
+/// This enables the monitor to watch for agent state files in the
+/// project-specific directory under `/tmp/maestro/agents/<hash>/`.
+#[tauri::command]
+pub async fn set_mcp_project_path(
+    state: State<'_, Arc<McpStatusMonitor>>,
+    project_path: String,
+) -> Result<(), String> {
+    let canonical = std::fs::canonicalize(&project_path)
+        .map_err(|e| format!("Invalid project path '{}': {}", project_path, e))?
+        .to_string_lossy()
+        .into_owned();
+
+    state.set_project_path(&canonical).await;
+    Ok(())
+}
+
+/// Writes a session-specific `.mcp.json` file to the working directory.
+///
+/// This must be called BEFORE launching the Claude CLI so it can discover
+/// and connect to the configured MCP servers, including the Maestro status server.
+///
+/// The written config includes:
+/// - The `maestro` MCP server with session-specific environment variables
+/// - All enabled custom servers from the project's `.mcp.json`
+///
+/// Existing user-defined servers in the working directory's `.mcp.json` are
+/// preserved (only Maestro-managed servers are replaced).
+#[tauri::command]
+pub async fn write_session_mcp_config(
+    mcp_state: State<'_, McpManager>,
+    working_dir: String,
+    session_id: u32,
+    project_path: String,
+    enabled_server_names: Vec<String>,
+) -> Result<(), String> {
+    let canonical = std::fs::canonicalize(&project_path)
+        .map_err(|e| format!("Invalid project path '{}': {}", project_path, e))?
+        .to_string_lossy()
+        .into_owned();
+
+    let project_hash = McpStatusMonitor::generate_project_hash(&canonical);
+
+    // Get full server configs for enabled servers
+    let all_servers = mcp_state.get_project_servers(&canonical);
+    let enabled_servers: Vec<_> = all_servers
+        .into_iter()
+        .filter(|s| enabled_server_names.contains(&s.name))
+        .collect();
+
+    log::info!(
+        "Writing MCP config for session {} to {} ({} enabled servers)",
+        session_id,
+        working_dir,
+        enabled_servers.len()
+    );
+
+    mcp_config_writer::write_session_mcp_config(
+        Path::new(&working_dir),
+        session_id,
+        &project_hash,
+        &enabled_servers,
+    )
+    .await
+}
+
+/// Removes a session-specific Maestro server from `.mcp.json`.
+///
+/// This should be called when a session is killed to clean up the config file.
+/// The function is idempotent - it does nothing if the session entry doesn't exist.
+#[tauri::command]
+pub async fn remove_session_mcp_config(
+    working_dir: String,
+    session_id: u32,
+) -> Result<(), String> {
+    let path = PathBuf::from(&working_dir);
+    mcp_config_writer::remove_session_mcp_config(&path, session_id).await
 }

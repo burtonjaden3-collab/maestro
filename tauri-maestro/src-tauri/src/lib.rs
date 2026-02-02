@@ -2,7 +2,12 @@ mod commands;
 mod core;
 mod git;
 
+use std::sync::Arc;
+
+use tauri::Manager;
+
 use core::mcp_manager::McpManager;
+use core::mcp_status_monitor::McpStatusMonitor;
 use core::plugin_manager::PluginManager;
 use core::ProcessManager;
 use core::session_manager::SessionManager;
@@ -20,11 +25,12 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .manage(McpManager::new())
+        .manage(Arc::new(McpStatusMonitor::new()))
         .manage(PluginManager::new())
         .manage(ProcessManager::new())
         .manage(SessionManager::new())
         .manage(WorktreeManager::new())
-        .setup(|_app| {
+        .setup(|app| {
             // Verify git is available at startup (non-blocking with timeout)
             tauri::async_runtime::spawn(async {
                 match tokio::time::timeout(
@@ -38,6 +44,14 @@ pub fn run() {
                     Err(_) => log::error!("Git version check timed out after 5s"),
                 }
             });
+
+            // Start MCP status monitor polling
+            let monitor = app.state::<Arc<McpStatusMonitor>>().inner().clone();
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                monitor.start_polling(app_handle).await;
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -87,6 +101,9 @@ pub fn run() {
             commands::mcp::get_session_mcp_count,
             commands::mcp::save_project_mcp_defaults,
             commands::mcp::load_project_mcp_defaults,
+            commands::mcp::set_mcp_project_path,
+            commands::mcp::write_session_mcp_config,
+            commands::mcp::remove_session_mcp_config,
             // Plugin commands
             commands::plugin::get_project_plugins,
             commands::plugin::refresh_project_plugins,

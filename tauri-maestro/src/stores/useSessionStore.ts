@@ -24,6 +24,8 @@ export type BackendSessionStatus =
  * @property branch - Git branch the session operates on, or null for the default branch.
  * @property worktree_path - Filesystem path to the git worktree, if one was created.
  * @property project_path - Canonicalized project directory this session belongs to.
+ * @property statusMessage - Brief description of what the agent is doing (from MCP status).
+ * @property needsInputPrompt - When status is NeedsInput, the specific question for the user.
  */
 export interface SessionConfig {
   id: number;
@@ -32,12 +34,16 @@ export interface SessionConfig {
   status: BackendSessionStatus;
   worktree_path: string | null;
   project_path: string;
+  statusMessage?: string;
+  needsInputPrompt?: string;
 }
 
 /** Shape of the Tauri `session-status-changed` event payload. */
 interface SessionStatusPayload {
   session_id: number;
   status: BackendSessionStatus;
+  message?: string;
+  needs_input_prompt?: string;
 }
 
 /**
@@ -55,6 +61,7 @@ interface SessionState {
   error: string | null;
   fetchSessions: () => Promise<void>;
   fetchSessionsForProject: (projectPath: string) => Promise<void>;
+  removeSession: (sessionId: number) => void;
   removeSessionsForProject: (projectPath: string) => Promise<SessionConfig[]>;
   getSessionsByProject: (projectPath: string) => SessionConfig[];
   initListeners: () => Promise<UnlistenFn>;
@@ -97,6 +104,12 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
     }
   },
 
+  removeSession: (sessionId: number) => {
+    set((state) => ({
+      sessions: state.sessions.filter((s) => s.id !== sessionId),
+    }));
+  },
+
   removeSessionsForProject: async (projectPath: string) => {
     try {
       const removed = await invoke<SessionConfig[]>("remove_sessions_for_project", {
@@ -125,9 +138,17 @@ export const useSessionStore = create<SessionState>()((set, get) => ({
       if (!activeUnlisten) {
         if (!pendingInit) {
           pendingInit = listen<SessionStatusPayload>("session-status-changed", (event) => {
+            const { session_id, status, message, needs_input_prompt } = event.payload;
             set((state) => ({
               sessions: state.sessions.map((s) =>
-                s.id === event.payload.session_id ? { ...s, status: event.payload.status } : s,
+                s.id === session_id
+                  ? {
+                      ...s,
+                      status,
+                      statusMessage: message,
+                      needsInputPrompt: needs_input_prompt,
+                    }
+                  : s,
               ),
             }));
           })

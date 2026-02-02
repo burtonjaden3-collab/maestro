@@ -1,7 +1,9 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 
+import { invoke } from "@tauri-apps/api/core";
+
 import { getBranchesWithWorktreeStatus, type BranchWithWorktreeStatus } from "@/lib/git";
-import { setSessionMcpServers, type McpServerConfig } from "@/lib/mcp";
+import { removeSessionMcpConfig, setSessionMcpServers, writeSessionMcpConfig, type McpServerConfig } from "@/lib/mcp";
 import { setSessionSkills, setSessionPlugins, type PluginConfig, type SkillConfig } from "@/lib/plugins";
 import {
   AI_CLI_CONFIG,
@@ -260,6 +262,8 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
       // Register the session in SessionManager (required before assigning branch)
       if (projectPath) {
         await createSession(sessionId, slot.mode, projectPath);
+        // Set project path for MCP status monitor to poll for status updates
+        await invoke("set_mcp_project_path", { projectPath });
       }
 
       // Assign the branch to the session so the header displays it
@@ -280,6 +284,22 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
 
       // Refresh sessions in store so TerminalView can read the updated config
       await useSessionStore.getState().fetchSessions();
+
+      // Write MCP config to working directory BEFORE launching Claude CLI
+      // This allows the CLI to discover MCP servers including the Maestro status server
+      if (workingDirectory && slot.mode === "Claude") {
+        try {
+          await writeSessionMcpConfig(
+            workingDirectory,
+            sessionId,
+            projectPath ?? workingDirectory,
+            slot.enabledMcpServers
+          );
+        } catch (err) {
+          console.error("Failed to write MCP config:", err);
+          // Non-fatal - continue with CLI launch, MCP servers just won't be available
+        }
+      }
 
       // Auto-launch AI CLI after shell initializes
       if (slot.mode !== "Plain") {
@@ -328,18 +348,27 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
 
   /**
    * Handles killing/closing a session, updating the slot state.
-   * Also cleans up any associated worktree.
+   * Also cleans up any associated worktree and session-specific MCP config.
    */
   const handleKill = useCallback((sessionId: number) => {
     // Find the slot to get worktree path before removing
     const slot = slotsRef.current.find((s) => s.sessionId === sessionId);
     const worktreePath = slot?.worktreePath;
+    const workingDir = worktreePath || projectPath;
 
     setSlots((prev) => prev.filter((s) => s.sessionId !== sessionId));
+
+    // Remove session from the session store
+    useSessionStore.getState().removeSession(sessionId);
 
     // Unregister session from the project
     if (tabId) {
       removeSessionFromProject(tabId, sessionId);
+    }
+
+    // Clean up session-specific MCP config (fire-and-forget)
+    if (workingDir) {
+      removeSessionMcpConfig(workingDir, sessionId).catch(console.error);
     }
 
     // Clean up worktree if one was created (fire-and-forget)

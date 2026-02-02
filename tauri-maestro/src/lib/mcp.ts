@@ -101,3 +101,44 @@ export async function loadProjectMcpDefaults(
 ): Promise<string[] | null> {
   return invoke<string[] | null>("load_project_mcp_defaults", { projectPath });
 }
+
+/**
+ * Writes a session-specific `.mcp.json` to the working directory.
+ *
+ * This MUST be called BEFORE launching the Claude CLI so it can discover
+ * the configured MCP servers, including the Maestro status server.
+ *
+ * @param workingDir - Directory where the CLI will be launched
+ * @param sessionId - Session ID for the Maestro MCP server env vars
+ * @param projectPath - Project path for hash generation and server lookup
+ * @param enabledServerNames - Names of MCP servers enabled for this session
+ */
+export async function writeSessionMcpConfig(
+  workingDir: string,
+  sessionId: number,
+  projectPath: string,
+  enabledServerNames: string[]
+): Promise<void> {
+  return invoke("write_session_mcp_config", {
+    workingDir,
+    sessionId,
+    projectPath,
+    enabledServerNames,
+  });
+}
+
+/**
+ * Removes a session-specific Maestro server from `.mcp.json`.
+ *
+ * This should be called when a session is killed to clean up the config file.
+ * The function is idempotent - it does nothing if the session entry doesn't exist.
+ *
+ * @param workingDir - Directory containing the `.mcp.json` file
+ * @param sessionId - Session ID to remove from the config
+ */
+export async function removeSessionMcpConfig(
+  workingDir: string,
+  sessionId: number,
+): Promise<void> {
+  return invoke("remove_session_mcp_config", { workingDir, sessionId });
+}
