@@ -32,6 +32,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(MarketplaceManager::new())
         .manage(McpManager::new())
         .manage(PluginManager::new())
@@ -174,6 +175,10 @@ pub fn run() {
             // Font detection commands
             commands::fonts::get_available_fonts,
             commands::fonts::check_font_available,
+            // Update commands
+            commands::update::check_for_updates,
+            commands::update::download_and_install_update,
+            commands::update::get_app_version,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Maestro");

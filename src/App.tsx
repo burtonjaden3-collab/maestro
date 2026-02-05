@@ -7,6 +7,8 @@ import { useSessionStore } from "@/stores/useSessionStore";
 import { useWorkspaceStore } from "@/stores/useWorkspaceStore";
 import { useGitStore } from "./stores/useGitStore";
 import { useTerminalSettingsStore } from "./stores/useTerminalSettingsStore";
+import { useUpdateStore } from "./stores/useUpdateStore";
+import { UpdateNotification } from "./components/update/UpdateNotification";
 import { GitGraphPanel } from "./components/git/GitGraphPanel";
 import { BottomBar } from "./components/shared/BottomBar";
 import { MultiProjectView, type MultiProjectViewHandle } from "./components/shared/MultiProjectView";
@@ -83,6 +85,31 @@ function App() {
       console.error("Failed to initialize terminal settings:", err);
     });
   }, [initializeTerminalSettings]);
+
+  // Initialize update event listeners and auto-check
+  const initUpdateListeners = useUpdateStore((s) => s.initListeners);
+  const checkForUpdates = useUpdateStore((s) => s.checkForUpdates);
+  const autoCheckEnabled = useUpdateStore((s) => s.autoCheckEnabled);
+  const checkIntervalMinutes = useUpdateStore((s) => s.checkIntervalMinutes);
+
+  useEffect(() => {
+    const unlistenPromise = initUpdateListeners().catch((err) => {
+      console.error("Failed to initialize update listeners:", err);
+      return () => {};
+    });
+    return () => {
+      unlistenPromise.then((unlisten) => unlisten());
+    };
+  }, [initUpdateListeners]);
+
+  useEffect(() => {
+    if (!autoCheckEnabled) return;
+    // Check on mount
+    checkForUpdates();
+    // Then periodically
+    const interval = setInterval(checkForUpdates, checkIntervalMinutes * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [autoCheckEnabled, checkIntervalMinutes, checkForUpdates]);
 
   const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
   const activeTab = tabs.find((tab) => tab.active) ?? null;
@@ -283,6 +310,7 @@ function App() {
         </div>
       </div>
 
+      <UpdateNotification />
     </div>
   );
 }
