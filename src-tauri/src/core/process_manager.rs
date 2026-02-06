@@ -8,6 +8,7 @@ use dashmap::DashMap;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Notify;
+use tokio::time::{self, Duration, MissedTickBehavior};
 
 #[cfg(unix)]
 use libc;
@@ -316,6 +317,13 @@ impl ProcessManager {
         let inner_ref = self.inner.clone();
         tokio::spawn(async move {
             let mut decoder = Utf8Decoder::new();
+            // Batch PTY output to reduce the number of cross-process IPC events.
+            // This helps Tauri's WebKit webview stay responsive when output is bursty.
+            let mut pending = String::new();
+            let mut ticker = time::interval(Duration::from_millis(16));
+            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            // First tick is immediate; advance once so the next tick is delayed.
+            ticker.tick().await;
             loop {
                 tokio::select! {
                     data = rx.recv() => {
@@ -356,16 +364,31 @@ impl ProcessManager {
 
                                 let text = decoder.decode(&bytes);
                                 if !text.is_empty() {
-                                    let _ = app.emit(&event_name, text);
+                                    pending.push_str(&text);
+                                    // Flush early if we have a lot buffered.
+                                    if pending.len() >= 16 * 1024 {
+                                        let chunk = std::mem::take(&mut pending);
+                                        let _ = app.emit(&event_name, chunk);
+                                    }
                                 }
                             }
                             None => break, // Channel closed
+                        }
+                    }
+                    _ = ticker.tick() => {
+                        if !pending.is_empty() {
+                            let chunk = std::mem::take(&mut pending);
+                            let _ = app.emit(&event_name, chunk);
                         }
                     }
                     _ = shutdown_clone.notified() => {
                         break;
                     }
                 }
+            }
+            if !pending.is_empty() {
+                let chunk = std::mem::take(&mut pending);
+                let _ = app.emit(&event_name, chunk);
             }
             log::debug!("PTY event emitter {id} exited");
         });
