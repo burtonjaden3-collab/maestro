@@ -1,5 +1,4 @@
 import { FitAddon } from "@xterm/addon-fit";
-import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";
@@ -247,6 +246,7 @@ export function TerminalView({ sessionId, status = "idle", isFocused = false, on
     let outputBuffer = "";
     let flushScheduled = false;
     let flushRafId: number | null = null;
+    const MAX_WRITE_CHARS_PER_FRAME = 8192;
 
     // Debounce backend resize IPC: FitAddon/ResizeObserver can cause bursts.
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -266,15 +266,13 @@ export function TerminalView({ sessionId, status = "idle", isFocused = false, on
         lineHeight: currentSettings.settings.lineHeight,
         theme: toXtermTheme(initialTheme),
         allowProposedApi: true,
-        scrollback: 10000,
+        // WebKit-based webviews can get sluggish with very large scrollback.
+        scrollback: 3000,
         tabStopWidth: 8,
       });
 
       fitAddon = new FitAddon();
-      const webLinksAddon = new WebLinksAddon();
-
       term.loadAddon(fitAddon);
-      term.loadAddon(webLinksAddon);
       term.open(container);
 
       termRef.current = term;
@@ -330,15 +328,29 @@ export function TerminalView({ sessionId, status = "idle", isFocused = false, on
         outputBuffer += data;
         if (flushScheduled) return;
         flushScheduled = true;
-        flushRafId = requestAnimationFrame(() => {
-          flushScheduled = false;
-          if (disposed || !term) return;
-          const chunk = outputBuffer;
-          outputBuffer = "";
-          if (chunk) {
+        const flush = () => {
+          flushRafId = requestAnimationFrame(() => {
+            if (disposed || !term) return;
+
+            if (!outputBuffer) {
+              flushScheduled = false;
+              return;
+            }
+
+            // Write a bounded amount per frame to keep UI responsive.
+            const chunk = outputBuffer.slice(0, MAX_WRITE_CHARS_PER_FRAME);
+            outputBuffer = outputBuffer.slice(chunk.length);
             term.write(chunk);
-          }
-        });
+
+            // If we still have buffered output, keep flushing next frame.
+            if (outputBuffer) {
+              flush();
+            } else {
+              flushScheduled = false;
+            }
+          });
+        };
+        flush();
       });
       listenerReady
         .then((fn) => {
