@@ -119,6 +119,22 @@ export function TerminalView({ sessionId, status = "idle", isFocused = false, on
   const termRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
 
+  // Coalesce expensive xterm fit calls (ResizeObserver can fire in bursts).
+  const fitRafIdRef = useRef<number | null>(null);
+  const fitPendingRef = useRef(false);
+  const scheduleFit = useCallback(() => {
+    if (fitPendingRef.current) return;
+    fitPendingRef.current = true;
+    fitRafIdRef.current = requestAnimationFrame(() => {
+      fitPendingRef.current = false;
+      try {
+        fitAddonRef.current?.fit();
+      } catch {
+        // Container may have zero dimensions during layout transitions
+      }
+    });
+  }, []);
+
   // Quick actions manager modal state
   const [showQuickActionsManager, setShowQuickActionsManager] = useState(false);
 
@@ -171,16 +187,16 @@ export function TerminalView({ sessionId, status = "idle", isFocused = false, on
       termRef.current.options.fontFamily = fontFamily;
       termRef.current.options.lineHeight = terminalSettings.lineHeight;
 
-      // Refit terminal to recalculate cell dimensions
-      requestAnimationFrame(() => {
-        try {
-          fitAddonRef.current?.fit();
-        } catch {
-          // Ignore fit errors during transition
-        }
-      });
+      // Refit terminal to recalculate cell dimensions (coalesced).
+      scheduleFit();
     }
-  }, [terminalSettings.fontSize, terminalSettings.fontFamily, terminalSettings.lineHeight, getEffectiveFontFamily]);
+  }, [
+    terminalSettings.fontSize,
+    terminalSettings.fontFamily,
+    terminalSettings.lineHeight,
+    getEffectiveFontFamily,
+    scheduleFit,
+  ]);
 
   /**
    * Immediately removes the terminal from UI (optimistic update),
@@ -224,6 +240,17 @@ export function TerminalView({ sessionId, status = "idle", isFocused = false, on
     let dataDisposable: { dispose: () => void } | null = null;
     let resizeDisposable: { dispose: () => void } | null = null;
     let resizeObserver: ResizeObserver | null = null;
+    let pendingFitRafId: number | null = null;
+
+    // Batch PTY output to avoid hammering xterm.write with tiny chunks.
+    // This helps keep the UI responsive when CLIs emit lots of output quickly.
+    let outputBuffer = "";
+    let flushScheduled = false;
+    let flushRafId: number | null = null;
+
+    // Debounce backend resize IPC: FitAddon/ResizeObserver can cause bursts.
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+    let pendingResize: { rows: number; cols: number } | null = null;
 
     // Wait for font to load before initializing terminal
     const initTerminal = async () => {
@@ -253,7 +280,7 @@ export function TerminalView({ sessionId, status = "idle", isFocused = false, on
       termRef.current = term;
       fitAddonRef.current = fitAddon;
 
-      requestAnimationFrame(() => {
+      pendingFitRafId = requestAnimationFrame(() => {
         try {
           fitAddon?.fit();
         } catch {
@@ -266,7 +293,16 @@ export function TerminalView({ sessionId, status = "idle", isFocused = false, on
       });
 
       resizeDisposable = term.onResize(({ rows, cols }) => {
-        resizePty(sessionId, rows, cols).catch(console.error);
+        pendingResize = { rows, cols };
+        if (resizeTimer) return;
+        resizeTimer = setTimeout(() => {
+          const next = pendingResize;
+          pendingResize = null;
+          resizeTimer = null;
+          if (!disposed && next) {
+            resizePty(sessionId, next.rows, next.cols).catch(console.error);
+          }
+        }, 60);
       });
 
       // Handle special keyboard shortcuts
@@ -290,9 +326,19 @@ export function TerminalView({ sessionId, status = "idle", isFocused = false, on
       });
 
       const listenerReady = onPtyOutput(sessionId, (data) => {
-        if (!disposed && term) {
-          term.write(data);
-        }
+        if (disposed || !term) return;
+        outputBuffer += data;
+        if (flushScheduled) return;
+        flushScheduled = true;
+        flushRafId = requestAnimationFrame(() => {
+          flushScheduled = false;
+          if (disposed || !term) return;
+          const chunk = outputBuffer;
+          outputBuffer = "";
+          if (chunk) {
+            term.write(chunk);
+          }
+        });
       });
       listenerReady
         .then((fn) => {
@@ -312,15 +358,7 @@ export function TerminalView({ sessionId, status = "idle", isFocused = false, on
         });
 
       resizeObserver = new ResizeObserver(() => {
-        requestAnimationFrame(() => {
-          if (!disposed && fitAddon) {
-            try {
-              fitAddon.fit();
-            } catch {
-              // Container may have zero dimensions during layout transitions
-            }
-          }
-        });
+        scheduleFit();
       });
       resizeObserver.observe(container);
     };
@@ -333,6 +371,20 @@ export function TerminalView({ sessionId, status = "idle", isFocused = false, on
 
     return () => {
       disposed = true;
+      if (pendingFitRafId !== null) {
+        cancelAnimationFrame(pendingFitRafId);
+      }
+      if (flushRafId !== null) {
+        cancelAnimationFrame(flushRafId);
+      }
+      if (fitRafIdRef.current !== null) {
+        cancelAnimationFrame(fitRafIdRef.current);
+        fitRafIdRef.current = null;
+        fitPendingRef.current = false;
+      }
+      if (resizeTimer) {
+        clearTimeout(resizeTimer);
+      }
       resizeObserver?.disconnect();
       dataDisposable?.dispose();
       resizeDisposable?.dispose();
@@ -342,7 +394,7 @@ export function TerminalView({ sessionId, status = "idle", isFocused = false, on
       fitAddonRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps -- Font settings are read once at init, dynamic updates via separate effect
-  }, [sessionId]);
+  }, [sessionId, scheduleFit]);
 
   // Focus the terminal when isFocused becomes true
   useEffect(() => {
