@@ -16,7 +16,7 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { BranchWithWorktreeStatus } from "@/lib/git";
 import type { McpServerConfig } from "@/lib/mcp";
@@ -136,6 +136,10 @@ export function PreLaunchCard({
   const modeConfig = getModeConfig(slot.mode);
   const ModeIcon = modeConfig.icon;
 
+  const enabledMcpSet = useMemo(() => new Set(slot.enabledMcpServers), [slot.enabledMcpServers]);
+  const enabledSkillsSet = useMemo(() => new Set(slot.enabledSkills), [slot.enabledSkills]);
+  const enabledPluginsSet = useMemo(() => new Set(slot.enabledPlugins), [slot.enabledPlugins]);
+
   // Close dropdowns on outside click
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -167,30 +171,35 @@ export function PreLaunchCard({
     return colonIndex >= 0 ? skillId.slice(colonIndex + 1) : skillId;
   };
 
-  // Build a map of skill base name -> skill for quick lookup
-  const skillByBaseName = new Map(skills.map((s) => [getSkillBaseName(s.id), s]));
+  // Group skills by plugin (and compute standalone skills) once per plugin/skill discovery update.
+  // This avoids re-doing O(plugins * skills) work on every keystroke in the dropdown searches.
+  const { pluginSkillsMap, standaloneSkills } = useMemo(() => {
+    const skillByBaseName = new Map<string, SkillConfig>();
+    for (const skill of skills) {
+      skillByBaseName.set(getSkillBaseName(skill.id), skill);
+    }
 
-  // Group skills by plugin using the plugin's skills array (matching by base name)
-  const pluginSkillsMap = new Map<string, typeof skills>();
-  const skillsInPlugins = new Set<string>();
+    const pluginSkillsMap = new Map<string, SkillConfig[]>();
+    const skillsInPlugins = new Set<string>();
 
-  for (const plugin of plugins) {
-    const pluginSkills: typeof skills = [];
-    for (const skillId of plugin.skills) {
-      const baseName = getSkillBaseName(skillId);
-      const skill = skillByBaseName.get(baseName);
-      if (skill) {
-        pluginSkills.push(skill);
-        skillsInPlugins.add(skill.id);
+    for (const plugin of plugins) {
+      const pluginSkills: SkillConfig[] = [];
+      for (const skillId of plugin.skills) {
+        const baseName = getSkillBaseName(skillId);
+        const skill = skillByBaseName.get(baseName);
+        if (skill) {
+          pluginSkills.push(skill);
+          skillsInPlugins.add(skill.id);
+        }
+      }
+      if (pluginSkills.length > 0) {
+        pluginSkillsMap.set(plugin.name, pluginSkills);
       }
     }
-    if (pluginSkills.length > 0) {
-      pluginSkillsMap.set(plugin.name, pluginSkills);
-    }
-  }
 
-  // Standalone skills are those not claimed by any plugin
-  const standaloneSkills = skills.filter((s) => !skillsInPlugins.has(s.id));
+    const standaloneSkills = skills.filter((s) => !skillsInPlugins.has(s.id));
+    return { pluginSkillsMap, standaloneSkills };
+  }, [skills, plugins]);
 
   // Toggle plugin expansion
   const togglePluginExpanded = (pluginId: string) => {
@@ -218,8 +227,16 @@ export function PreLaunchCard({
   const displayBranch = selectedBranchInfo?.name ?? slot.branch ?? "Current";
 
   // Separate local and remote branches
-  const localBranches = branches.filter((b) => !b.isRemote);
-  const remoteBranches = branches.filter((b) => b.isRemote);
+  const { localBranches, remoteBranches } = useMemo(() => {
+    return {
+      localBranches: branches.filter((b) => !b.isRemote),
+      remoteBranches: branches.filter((b) => b.isRemote),
+    };
+  }, [branches]);
+
+  const branchSearchLower = branchSearchQuery.toLowerCase();
+  const mcpSearchLower = mcpSearchQuery.toLowerCase();
+  const pluginsSearchLower = pluginsSearchQuery.toLowerCase();
 
   return (
     <div className="content-dark terminal-cell flex h-full flex-col items-center justify-center bg-maestro-bg p-4">
@@ -358,15 +375,13 @@ export function PreLaunchCard({
                     )}
 
                     {/* Local branches */}
-                    {localBranches.filter((b) =>
-                      b.name.toLowerCase().includes(branchSearchQuery.toLowerCase())
-                    ).length > 0 && (
+                    {localBranches.filter((b) => b.name.toLowerCase().includes(branchSearchLower)).length > 0 && (
                       <>
                         <div className="border-t border-maestro-border px-3 py-1 text-[9px] font-medium uppercase tracking-wide text-maestro-muted">
                           Local
                         </div>
                         {localBranches
-                          .filter((b) => b.name.toLowerCase().includes(branchSearchQuery.toLowerCase()))
+                          .filter((b) => b.name.toLowerCase().includes(branchSearchLower))
                           .map((branch) => (
                             <button
                               key={branch.name}
@@ -400,15 +415,13 @@ export function PreLaunchCard({
                     )}
 
                     {/* Remote branches */}
-                    {remoteBranches.filter((b) =>
-                      b.name.toLowerCase().includes(branchSearchQuery.toLowerCase())
-                    ).length > 0 && (
+                    {remoteBranches.filter((b) => b.name.toLowerCase().includes(branchSearchLower)).length > 0 && (
                       <>
                         <div className="border-t border-maestro-border px-3 py-1 text-[9px] font-medium uppercase tracking-wide text-maestro-muted">
                           Remote
                         </div>
                         {remoteBranches
-                          .filter((b) => b.name.toLowerCase().includes(branchSearchQuery.toLowerCase()))
+                          .filter((b) => b.name.toLowerCase().includes(branchSearchLower))
                           .map((branch) => (
                             <button
                               key={branch.name}
@@ -438,9 +451,9 @@ export function PreLaunchCard({
 
                     {/* No results message */}
                     {branchSearchQuery &&
-                      localBranches.filter((b) => b.name.toLowerCase().includes(branchSearchQuery.toLowerCase())).length === 0 &&
-                      remoteBranches.filter((b) => b.name.toLowerCase().includes(branchSearchQuery.toLowerCase())).length === 0 &&
-                      !"use current branch".includes(branchSearchQuery.toLowerCase()) && (
+                      localBranches.filter((b) => b.name.toLowerCase().includes(branchSearchLower)).length === 0 &&
+                      remoteBranches.filter((b) => b.name.toLowerCase().includes(branchSearchLower)).length === 0 &&
+                      !"use current branch".includes(branchSearchLower) && (
                         <div className="px-3 py-2 text-center text-xs text-maestro-muted">
                           No branches match "{branchSearchQuery}"
                         </div>
@@ -526,10 +539,10 @@ export function PreLaunchCard({
                   <div className="max-h-36 overflow-y-auto">
                     {mcpServers
                       .filter((server) =>
-                        server.name.toLowerCase().includes(mcpSearchQuery.toLowerCase())
+                        server.name.toLowerCase().includes(mcpSearchLower)
                       )
                       .map((server) => {
-                        const isEnabled = slot.enabledMcpServers.includes(server.name);
+                        const isEnabled = enabledMcpSet.has(server.name);
                         const serverType = server.type;
                         return (
                           <button
@@ -557,7 +570,7 @@ export function PreLaunchCard({
                         );
                       })}
                     {mcpServers.filter((server) =>
-                      server.name.toLowerCase().includes(mcpSearchQuery.toLowerCase())
+                      server.name.toLowerCase().includes(mcpSearchLower)
                     ).length === 0 && (
                       <div className="px-3 py-2 text-center text-xs text-maestro-muted">
                         No servers match "{mcpSearchQuery}"
@@ -651,7 +664,7 @@ export function PreLaunchCard({
                         {plugins
                           .filter((plugin) => {
                             if (!pluginsSearchQuery) return true;
-                            const query = pluginsSearchQuery.toLowerCase();
+                            const query = pluginsSearchLower;
                             // Match plugin name
                             if (plugin.name.toLowerCase().includes(query)) return true;
                             // Match any skill name within the plugin
@@ -661,7 +674,7 @@ export function PreLaunchCard({
                             );
                           })
                           .map((plugin) => {
-                            const isPluginEnabled = slot.enabledPlugins.includes(plugin.id);
+                            const isPluginEnabled = enabledPluginsSet.has(plugin.id);
                             const pluginSkills = pluginSkillsMap.get(plugin.name) ?? [];
                             const isExpanded = expandedPlugins.has(plugin.id);
                             const hasSkillsToShow = pluginSkills.length > 0;
@@ -669,7 +682,7 @@ export function PreLaunchCard({
                             // Filter skills by search query
                             const filteredPluginSkills = pluginsSearchQuery
                               ? pluginSkills.filter((skill) =>
-                                  skill.name.toLowerCase().includes(pluginsSearchQuery.toLowerCase())
+                                  skill.name.toLowerCase().includes(pluginsSearchLower)
                                 )
                               : pluginSkills;
 
@@ -722,7 +735,7 @@ export function PreLaunchCard({
                                 {isExpanded && hasSkillsToShow && (
                                   <div className="ml-5 border-l border-maestro-border/40 pl-2">
                                     {(pluginsSearchQuery ? filteredPluginSkills : pluginSkills).map((skill) => {
-                                      const isSkillEnabled = slot.enabledSkills.includes(skill.id);
+                                      const isSkillEnabled = enabledSkillsSet.has(skill.id);
                                       return (
                                         <button
                                           key={skill.id}
@@ -764,10 +777,10 @@ export function PreLaunchCard({
                         {standaloneSkills
                           .filter((skill) =>
                             !pluginsSearchQuery ||
-                            skill.name.toLowerCase().includes(pluginsSearchQuery.toLowerCase())
+                            skill.name.toLowerCase().includes(pluginsSearchLower)
                           )
                           .map((skill) => {
-                            const isEnabled = slot.enabledSkills.includes(skill.id);
+                            const isEnabled = enabledSkillsSet.has(skill.id);
                             const sourceLabel = getSkillSourceLabel(skill.source);
                             return (
                               <button
@@ -802,13 +815,13 @@ export function PreLaunchCard({
                     {/* No results message */}
                     {pluginsSearchQuery &&
                      plugins.filter((plugin) => {
-                       const query = pluginsSearchQuery.toLowerCase();
+                       const query = pluginsSearchLower;
                        if (plugin.name.toLowerCase().includes(query)) return true;
                        const pluginSkills = pluginSkillsMap.get(plugin.name) ?? [];
                        return pluginSkills.some((skill) => skill.name.toLowerCase().includes(query));
                      }).length === 0 &&
                      standaloneSkills.filter((skill) =>
-                       skill.name.toLowerCase().includes(pluginsSearchQuery.toLowerCase())
+                       skill.name.toLowerCase().includes(pluginsSearchLower)
                      ).length === 0 && (
                       <div className="px-3 py-2 text-center text-xs text-maestro-muted">
                         No results match "{pluginsSearchQuery}"

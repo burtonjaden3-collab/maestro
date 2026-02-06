@@ -48,6 +48,9 @@ claude.md
 plan.md
 reddit-post.md
 
+# Local logs
+tauri-dev.log
+
 # Jekyll docs site
 website/_site/
 website/.jekyll-cache/

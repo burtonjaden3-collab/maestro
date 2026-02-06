@@ -25,7 +25,15 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      ignored: ["**/src-tauri/**"],
+      // In Tauri dev, Rust build artifacts can explode in file count (target/, AppDir, etc.).
+      // Watching them causes ENOSPC on Linux and can also create UI jank from heavy polling.
+      ignored: [
+        "**/.git/**",
+        "**/dist/**",
+        "**/src-tauri/**",
+        "**/target/**",
+        "**/website/_site/**",
+      ],
     },
   },
   test: {

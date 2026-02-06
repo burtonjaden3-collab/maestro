@@ -373,11 +373,11 @@ export const TerminalGrid = forwardRef<TerminalGridHandle, TerminalGridProps>(fu
       // Check if config changed (but not the branch itself - that's handled by updateSlotBranch)
       const configChanged =
         prevSlot.branch === slot.branch && // Same branch
-        (
-          JSON.stringify(prevSlot.enabledPlugins) !== JSON.stringify(slot.enabledPlugins) ||
-          JSON.stringify(prevSlot.enabledSkills) !== JSON.stringify(slot.enabledSkills) ||
-          JSON.stringify(prevSlot.enabledMcpServers) !== JSON.stringify(slot.enabledMcpServers)
-        );
+        // NOTE: These arrays are treated as immutable and replaced on change.
+        // Comparing by reference avoids expensive JSON.stringify() on every toggle.
+        (prevSlot.enabledPlugins !== slot.enabledPlugins ||
+          prevSlot.enabledSkills !== slot.enabledSkills ||
+          prevSlot.enabledMcpServers !== slot.enabledMcpServers);
 
       if (configChanged) {
         debouncedSaveBranchConfig(slot);
