@@ -100,6 +100,12 @@ function getModeConfig(mode: AiMode) {
   return AI_MODES.find((m) => m.mode === mode) ?? AI_MODES[0];
 }
 
+// Helper to extract base name from skill ID (strip prefix like "plugin:", "project:", "personal:")
+function getSkillBaseName(skillId: string): string {
+  const colonIndex = skillId.indexOf(":");
+  return colonIndex >= 0 ? skillId.slice(colonIndex + 1) : skillId;
+}
+
 export function PreLaunchCard({
   slot,
   branches,
@@ -164,12 +170,6 @@ export function PreLaunchCard({
   const enabledCount = slot.enabledMcpServers.length;
   const totalCount = mcpServers.length;
   const hasMcpServers = totalCount > 0;
-
-  // Helper to extract base name from skill ID (strip prefix like "plugin:", "project:", "personal:")
-  const getSkillBaseName = (skillId: string): string => {
-    const colonIndex = skillId.indexOf(":");
-    return colonIndex >= 0 ? skillId.slice(colonIndex + 1) : skillId;
-  };
 
   // Group skills by plugin (and compute standalone skills) once per plugin/skill discovery update.
   // This avoids re-doing O(plugins * skills) work on every keystroke in the dropdown searches.
